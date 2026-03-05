@@ -10,7 +10,7 @@ import { ParakeetModelManager } from './ParakeetModelManager';
 
 
 export interface TranscriptModelProps {
-    provider: 'localWhisper' | 'parakeet' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
+    provider: 'localWhisper' | 'parakeet' | 'runpod' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
     model: string;
     apiKey?: string | null;
 }
@@ -37,6 +37,9 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
         if (transcriptModelConfig.provider === 'localWhisper' || transcriptModelConfig.provider === 'parakeet') {
             setApiKey(null);
         }
+        if (transcriptModelConfig.provider === 'runpod') {
+            fetchApiKey('runpod');
+        }
     }, [transcriptModelConfig.provider]);
 
     const fetchApiKey = async (provider: string) => {
@@ -53,17 +56,32 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     const modelOptions = {
         localWhisper: [], // Model selection handled by ModelManager component
         parakeet: [], // Model selection handled by ParakeetModelManager component
+        runpod: [], // Endpoint ID handled by text input
         deepgram: ['nova-2-phonecall'],
         elevenLabs: ['eleven_multilingual_v2'],
         groq: ['llama-3.3-70b-versatile'],
         openai: ['gpt-4o'],
     };
-    const requiresApiKey = transcriptModelConfig.provider === 'deepgram' || transcriptModelConfig.provider === 'elevenLabs' || transcriptModelConfig.provider === 'openai' || transcriptModelConfig.provider === 'groq';
+    const requiresApiKey = transcriptModelConfig.provider === 'runpod' || transcriptModelConfig.provider === 'deepgram' || transcriptModelConfig.provider === 'elevenLabs' || transcriptModelConfig.provider === 'openai' || transcriptModelConfig.provider === 'groq';
 
     const handleInputClick = () => {
         if (isApiKeyLocked) {
             setIsLockButtonVibrating(true);
             setTimeout(() => setIsLockButtonVibrating(false), 500);
+        }
+    };
+
+    // Save RunPod config to database
+    const saveRunpodConfig = async (endpointId: string, runpodApiKey?: string) => {
+        try {
+            await invoke('api_save_transcript_config', {
+                provider: 'runpod',
+                model: endpointId,
+                apiKey: runpodApiKey ?? null,
+            });
+            console.log('[TranscriptSettings] RunPod config saved');
+        } catch (err) {
+            console.error('[TranscriptSettings] Failed to save RunPod config:', err);
         }
     };
 
@@ -112,7 +130,15 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                 onValueChange={(value) => {
                                     const provider = value as TranscriptModelProps['provider'];
                                     setUiProvider(provider);
-                                    if (provider !== 'localWhisper' && provider !== 'parakeet') {
+                                    if (provider === 'runpod') {
+                                        const existingEndpointId = transcriptModelConfig.provider === 'runpod' ? transcriptModelConfig.model : '';
+                                        setTranscriptModelConfig({
+                                            ...transcriptModelConfig,
+                                            provider: 'runpod',
+                                            model: existingEndpointId,
+                                        });
+                                        fetchApiKey('runpod');
+                                    } else if (provider !== 'localWhisper' && provider !== 'parakeet') {
                                         fetchApiKey(provider);
                                     }
                                 }}
@@ -123,6 +149,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                 <SelectContent>
                                     <SelectItem value="parakeet">⚡ Parakeet (Recommended - Real-time / Accurate)</SelectItem>
                                     <SelectItem value="localWhisper">🏠 Local Whisper (High Accuracy)</SelectItem>
+                                    <SelectItem value="runpod">☁️ RunPod (Remote GPU)</SelectItem>
                                     {/* <SelectItem value="deepgram">☁️ Deepgram (Backup)</SelectItem>
                                     <SelectItem value="elevenLabs">☁️ ElevenLabs</SelectItem>
                                     <SelectItem value="groq">☁️ Groq</SelectItem>
@@ -130,7 +157,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                 </SelectContent>
                             </Select>
 
-                            {uiProvider !== 'localWhisper' && uiProvider !== 'parakeet' && (
+                            {uiProvider !== 'localWhisper' && uiProvider !== 'parakeet' && uiProvider !== 'runpod' && (
                                 <Select
                                     value={transcriptModelConfig.model}
                                     onValueChange={(value) => {
@@ -172,6 +199,34 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                         </div>
                     )}
 
+                    {uiProvider === 'runpod' && (
+                        <div className="mt-4">
+                            <Label className="block text-sm font-medium text-gray-700 mb-1">
+                                RunPod Endpoint ID
+                            </Label>
+                            <div className="mx-1">
+                                <Input
+                                    type="text"
+                                    className="focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                                    value={transcriptModelConfig.provider === 'runpod' ? transcriptModelConfig.model : ''}
+                                    onChange={(e) => {
+                                        setTranscriptModelConfig({
+                                            ...transcriptModelConfig,
+                                            provider: 'runpod',
+                                            model: e.target.value,
+                                        });
+                                    }}
+                                    onBlur={(e) => {
+                                        saveRunpodConfig(e.target.value);
+                                    }}
+                                    placeholder="e.g. abc123def"
+                                />
+                                <p className="text-xs text-gray-500 mt-1">
+                                    Find this in your RunPod dashboard under Serverless &gt; Endpoints
+                                </p>
+                            </div>
+                        </div>
+                    )}
 
                     {requiresApiKey && (
                         <div>
@@ -185,6 +240,11 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                         }`}
                                     value={apiKey || ''}
                                     onChange={(e) => setApiKey(e.target.value)}
+                                    onBlur={(e) => {
+                                        if (uiProvider === 'runpod' && !isApiKeyLocked) {
+                                            saveRunpodConfig(transcriptModelConfig.model, e.target.value);
+                                        }
+                                    }}
                                     disabled={isApiKeyLocked}
                                     onClick={handleInputClick}
                                     placeholder="Enter your API key"
