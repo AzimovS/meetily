@@ -1,16 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Input } from './ui/input';
-import { Button } from './ui/button';
 import { Label } from './ui/label';
-import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
+import { Button } from './ui/button';
+import { ApiKeyInput } from './ui/ApiKeyInput';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
+import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 
 export interface TranscriptModelProps {
-    provider: 'localWhisper' | 'parakeet' | 'runpod' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
+    provider: 'localWhisper' | 'parakeet' | 'voxtral' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
     model: string;
     apiKey?: string | null;
 }
@@ -21,274 +23,183 @@ export interface TranscriptSettingsProps {
     onModelSelect?: () => void;
 }
 
+const LOCAL_PROVIDERS = new Set<TranscriptModelProps['provider']>(['localWhisper', 'parakeet']);
+
 export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelConfig, onModelSelect }: TranscriptSettingsProps) {
-    const [apiKey, setApiKey] = useState<string | null>(transcriptModelConfig.apiKey || null);
-    const [showApiKey, setShowApiKey] = useState<boolean>(false);
-    const [isApiKeyLocked, setIsApiKeyLocked] = useState<boolean>(true);
-    const [isLockButtonVibrating, setIsLockButtonVibrating] = useState<boolean>(false);
+    // Local draft state -- only pushed to context on Save (remote) or model select (local)
     const [uiProvider, setUiProvider] = useState<TranscriptModelProps['provider']>(transcriptModelConfig.provider);
+    const [uiModel, setUiModel] = useState(transcriptModelConfig.model);
+    const [uiApiKey, setUiApiKey] = useState<string | null>(transcriptModelConfig.apiKey || null);
+    const [apiKeyDirty, setApiKeyDirty] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
 
-    // Sync uiProvider when backend config changes (e.g., after model selection or initial load)
-    useEffect(() => {
-        setUiProvider(transcriptModelConfig.provider);
-    }, [transcriptModelConfig.provider]);
+    const isRemoteProvider = !LOCAL_PROVIDERS.has(uiProvider);
+    const requiresApiKey = isRemoteProvider;
 
-    useEffect(() => {
-        if (transcriptModelConfig.provider === 'localWhisper' || transcriptModelConfig.provider === 'parakeet') {
-            setApiKey(null);
-        }
-        if (transcriptModelConfig.provider === 'runpod') {
-            fetchApiKey('runpod');
-        }
-    }, [transcriptModelConfig.provider]);
+    const isDoneDisabled =
+        (isRemoteProvider && !uiModel?.trim()) ||
+        (requiresApiKey && !uiApiKey?.trim());
 
-    const fetchApiKey = async (provider: string) => {
+    const fetchApiKey = async (provider: TranscriptModelProps['provider']) => {
         try {
-
             const data = await invoke('api_get_transcript_api_key', { provider }) as string;
-
-            setApiKey(data || '');
+            if (!apiKeyDirty) {
+                setUiApiKey(data || '');
+            }
         } catch (err) {
             console.error('Error fetching API key:', err);
-            setApiKey(null);
-        }
-    };
-    const modelOptions = {
-        localWhisper: [], // Model selection handled by ModelManager component
-        parakeet: [], // Model selection handled by ParakeetModelManager component
-        runpod: [], // Endpoint ID handled by text input
-        deepgram: ['nova-2-phonecall'],
-        elevenLabs: ['eleven_multilingual_v2'],
-        groq: ['llama-3.3-70b-versatile'],
-        openai: ['gpt-4o'],
-    };
-    const requiresApiKey = transcriptModelConfig.provider === 'runpod' || transcriptModelConfig.provider === 'deepgram' || transcriptModelConfig.provider === 'elevenLabs' || transcriptModelConfig.provider === 'openai' || transcriptModelConfig.provider === 'groq';
-
-    const handleInputClick = () => {
-        if (isApiKeyLocked) {
-            setIsLockButtonVibrating(true);
-            setTimeout(() => setIsLockButtonVibrating(false), 500);
+            if (!apiKeyDirty) {
+                setUiApiKey(null);
+            }
         }
     };
 
-    // Save RunPod config to database
-    const saveRunpodConfig = async (endpointId: string, runpodApiKey?: string) => {
+    const handleSave = async () => {
+        if (isSaving) return;
+        setIsSaving(true);
         try {
+            const config: TranscriptModelProps = {
+                provider: uiProvider,
+                model: uiModel,
+                apiKey: uiApiKey?.trim() || null,
+            };
             await invoke('api_save_transcript_config', {
-                provider: 'runpod',
-                model: endpointId,
-                apiKey: runpodApiKey ?? null,
+                provider: config.provider,
+                model: config.model,
+                apiKey: config.apiKey,
             });
-            console.log('[TranscriptSettings] RunPod config saved');
+
+            // Only update context after successful persist
+            setTranscriptModelConfig(config);
+            toast.success('Transcription settings saved');
         } catch (err) {
-            console.error('[TranscriptSettings] Failed to save RunPod config:', err);
+            console.error('[TranscriptSettings] Failed to save:', err);
+            toast.error('Failed to save transcription settings');
+        } finally {
+            setIsSaving(false);
         }
     };
 
     const handleWhisperModelSelect = (modelName: string) => {
-        // Always update config when model is selected, regardless of current provider
-        // This ensures the model is set when user switches back
-        setTranscriptModelConfig({
-            ...transcriptModelConfig,
-            provider: 'localWhisper', // Ensure provider is set correctly
-            model: modelName
-        });
-        // Close modal after selection
-        if (onModelSelect) {
-            onModelSelect();
-        }
+        const config: TranscriptModelProps = { provider: 'localWhisper', model: modelName, apiKey: null };
+        setUiModel(modelName);
+        setTranscriptModelConfig(config);
+        if (onModelSelect) onModelSelect();
     };
 
     const handleParakeetModelSelect = (modelName: string) => {
-        // Always update config when model is selected, regardless of current provider
-        // This ensures the model is set when user switches back
-        setTranscriptModelConfig({
-            ...transcriptModelConfig,
-            provider: 'parakeet', // Ensure provider is set correctly
-            model: modelName
-        });
-        // Close modal after selection
-        if (onModelSelect) {
-            onModelSelect();
-        }
+        const config: TranscriptModelProps = { provider: 'parakeet', model: modelName, apiKey: null };
+        setUiModel(modelName);
+        setTranscriptModelConfig(config);
+        if (onModelSelect) onModelSelect();
     };
 
     return (
-        <div>
-            <div>
-                {/* <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-lg font-semibold text-gray-900">Transcript Settings</h3>
-                </div> */}
-                <div className="space-y-4 pb-6">
-                    <div>
-                        <Label className="block text-sm font-medium text-gray-700 mb-1">
-                            Transcript Model
-                        </Label>
-                        <div className="flex space-x-2 mx-1">
-                            <Select
-                                value={uiProvider}
-                                onValueChange={(value) => {
-                                    const provider = value as TranscriptModelProps['provider'];
-                                    setUiProvider(provider);
-                                    if (provider === 'runpod') {
-                                        const existingEndpointId = transcriptModelConfig.provider === 'runpod' ? transcriptModelConfig.model : '';
-                                        setTranscriptModelConfig({
-                                            ...transcriptModelConfig,
-                                            provider: 'runpod',
-                                            model: existingEndpointId,
-                                        });
-                                        fetchApiKey('runpod');
-                                    } else if (provider !== 'localWhisper' && provider !== 'parakeet') {
-                                        fetchApiKey(provider);
-                                    }
-                                }}
-                            >
-                                <SelectTrigger className='focus:ring-1 focus:ring-blue-500 focus:border-blue-500'>
-                                    <SelectValue placeholder="Select provider" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="parakeet">⚡ Parakeet (Recommended - Real-time / Accurate)</SelectItem>
-                                    <SelectItem value="localWhisper">🏠 Local Whisper (High Accuracy)</SelectItem>
-                                    <SelectItem value="runpod">☁️ RunPod (Remote GPU)</SelectItem>
-                                    {/* <SelectItem value="deepgram">☁️ Deepgram (Backup)</SelectItem>
-                                    <SelectItem value="elevenLabs">☁️ ElevenLabs</SelectItem>
-                                    <SelectItem value="groq">☁️ Groq</SelectItem>
-                                    <SelectItem value="openai">☁️ OpenAI</SelectItem> */}
-                                </SelectContent>
-                            </Select>
-
-                            {uiProvider !== 'localWhisper' && uiProvider !== 'parakeet' && uiProvider !== 'runpod' && (
-                                <Select
-                                    value={transcriptModelConfig.model}
-                                    onValueChange={(value) => {
-                                        const model = value as TranscriptModelProps['model'];
-                                        setTranscriptModelConfig({ ...transcriptModelConfig, provider: uiProvider, model });
-                                    }}
-                                >
-                                    <SelectTrigger className='focus:ring-1 focus:ring-blue-500 focus:border-blue-500'>
-                                        <SelectValue placeholder="Select model" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {modelOptions[uiProvider].map((model) => (
-                                            <SelectItem key={model} value={model}>{model}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
-
-                        </div>
-                    </div>
-
-                    {uiProvider === 'localWhisper' && (
-                        <div className="mt-6">
-                            <ModelManager
-                                selectedModel={transcriptModelConfig.provider === 'localWhisper' ? transcriptModelConfig.model : undefined}
-                                onModelSelect={handleWhisperModelSelect}
-                                autoSave={true}
-                            />
-                        </div>
-                    )}
-
-                    {uiProvider === 'parakeet' && (
-                        <div className="mt-6">
-                            <ParakeetModelManager
-                                selectedModel={transcriptModelConfig.provider === 'parakeet' ? transcriptModelConfig.model : undefined}
-                                onModelSelect={handleParakeetModelSelect}
-                                autoSave={true}
-                            />
-                        </div>
-                    )}
-
-                    {uiProvider === 'runpod' && (
-                        <div className="mt-4">
-                            <Label className="block text-sm font-medium text-gray-700 mb-1">
-                                RunPod Endpoint ID
-                            </Label>
-                            <div className="mx-1">
-                                <Input
-                                    type="text"
-                                    className="focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                                    value={transcriptModelConfig.provider === 'runpod' ? transcriptModelConfig.model : ''}
-                                    onChange={(e) => {
-                                        setTranscriptModelConfig({
-                                            ...transcriptModelConfig,
-                                            provider: 'runpod',
-                                            model: e.target.value,
-                                        });
-                                    }}
-                                    onBlur={(e) => {
-                                        saveRunpodConfig(e.target.value);
-                                    }}
-                                    placeholder="e.g. abc123def"
-                                />
-                                <p className="text-xs text-gray-500 mt-1">
-                                    Find this in your RunPod dashboard under Serverless &gt; Endpoints
-                                </p>
-                            </div>
-                        </div>
-                    )}
-
-                    {requiresApiKey && (
-                        <div>
-                            <Label className="block text-sm font-medium text-gray-700 mb-1">
-                                API Key
-                            </Label>
-                            <div className="relative mx-1">
-                                <Input
-                                    type={showApiKey ? "text" : "password"}
-                                    className={`pr-24 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 ${isApiKeyLocked ? 'bg-gray-100 cursor-not-allowed' : ''
-                                        }`}
-                                    value={apiKey || ''}
-                                    onChange={(e) => setApiKey(e.target.value)}
-                                    onBlur={(e) => {
-                                        if (uiProvider === 'runpod' && !isApiKeyLocked) {
-                                            saveRunpodConfig(transcriptModelConfig.model, e.target.value);
-                                        }
-                                    }}
-                                    disabled={isApiKeyLocked}
-                                    onClick={handleInputClick}
-                                    placeholder="Enter your API key"
-                                />
-                                {isApiKeyLocked && (
-                                    <div
-                                        onClick={handleInputClick}
-                                        className="absolute inset-0 flex items-center justify-center bg-gray-100 bg-opacity-50 rounded-md cursor-not-allowed"
-                                    />
-                                )}
-                                <div className="absolute inset-y-0 right-0 pr-1 flex items-center">
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        onClick={() => setIsApiKeyLocked(!isApiKeyLocked)}
-                                        className={`transition-colors duration-200 ${isLockButtonVibrating ? 'animate-vibrate text-red-500' : ''
-                                            }`}
-                                        title={isApiKeyLocked ? "Unlock to edit" : "Lock to prevent editing"}
-                                    >
-                                        {isApiKeyLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        onClick={() => setShowApiKey(!showApiKey)}
-                                    >
-                                        {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                                    </Button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
+        <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold">Transcription Settings</h3>
             </div>
-        </div >
-    )
+
+            <div className="space-y-4">
+                <div>
+                    <Label>Transcription Model</Label>
+                    <div className="flex space-x-2 mt-1">
+                        <Select
+                            value={uiProvider}
+                            onValueChange={(value) => {
+                                const provider = value as TranscriptModelProps['provider'];
+                                setUiProvider(provider);
+                                setUiApiKey(null);
+                                setApiKeyDirty(false);
+
+                                if (provider === 'voxtral') {
+                                    const existingUrl = transcriptModelConfig.provider === 'voxtral'
+                                        ? transcriptModelConfig.model : '';
+                                    setUiModel(existingUrl);
+                                    fetchApiKey('voxtral');
+                                } else if (LOCAL_PROVIDERS.has(provider)) {
+                                    const existingModel = transcriptModelConfig.provider === provider
+                                        ? transcriptModelConfig.model : '';
+                                    setUiModel(existingModel);
+                                }
+                            }}
+                        >
+                            <SelectTrigger>
+                                <SelectValue placeholder="Select provider" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="parakeet">Parakeet (Recommended - Real-time / Accurate)</SelectItem>
+                                <SelectItem value="localWhisper">Local Whisper (High Accuracy)</SelectItem>
+                                <SelectItem value="voxtral">Voxtral (Remote)</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                </div>
+
+                {uiProvider === 'localWhisper' && (
+                    <div>
+                        <ModelManager
+                            selectedModel={transcriptModelConfig.provider === 'localWhisper' ? transcriptModelConfig.model : undefined}
+                            onModelSelect={handleWhisperModelSelect}
+                            autoSave={true}
+                        />
+                    </div>
+                )}
+
+                {uiProvider === 'parakeet' && (
+                    <div>
+                        <ParakeetModelManager
+                            selectedModel={transcriptModelConfig.provider === 'parakeet' ? transcriptModelConfig.model : undefined}
+                            onModelSelect={handleParakeetModelSelect}
+                            autoSave={true}
+                        />
+                    </div>
+                )}
+
+                {uiProvider === 'voxtral' && (
+                    <div>
+                        <Label>Endpoint URL</Label>
+                        <Input
+                            type="url"
+                            className="mt-1"
+                            value={uiModel}
+                            onChange={(e) => setUiModel(e.target.value)}
+                            placeholder="e.g. https://your-server/v1/audio/transcriptions"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                            The full URL of your Voxtral-compatible transcription endpoint
+                        </p>
+                    </div>
+                )}
+
+                {requiresApiKey && (
+                    <div>
+                        <Label>API Key</Label>
+                        <ApiKeyInput
+                            value={uiApiKey}
+                            onChange={(value) => {
+                                setUiApiKey(value);
+                                setApiKeyDirty(true);
+                            }}
+                        />
+                    </div>
+                )}
+
+                {isRemoteProvider && (
+                    <div className="mt-6 flex justify-end">
+                        <Button
+                            className={cn(
+                                'px-4 text-sm font-medium text-white rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500',
+                                isDoneDisabled || isSaving ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
+                            )}
+                            onClick={handleSave}
+                            disabled={isDoneDisabled || isSaving}
+                        >
+                            {isSaving ? 'Saving...' : 'Save'}
+                        </Button>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 }
-
-
-
-
-
-
-
-
