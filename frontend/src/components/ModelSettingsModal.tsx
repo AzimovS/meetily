@@ -17,7 +17,8 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
-import { Lock, Unlock, Eye, EyeOff, RefreshCw, CheckCircle2, XCircle, ChevronDown, ChevronUp, Download, ExternalLink, Check, ChevronsUpDown } from 'lucide-react';
+import { RefreshCw, CheckCircle2, XCircle, ChevronDown, ChevronUp, Download, ExternalLink, Check, ChevronsUpDown } from 'lucide-react';
+import { ApiKeyInput } from '@/components/ui/ApiKeyInput';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Command,
@@ -124,9 +125,6 @@ export function ModelSettingsModal({
   const [models, setModels] = useState<OllamaModel[]>([]);
   const [error, setError] = useState<string>('');
   const [apiKey, setApiKey] = useState<string | null>(modelConfig.apiKey || null);
-  const [showApiKey, setShowApiKey] = useState<boolean>(false);
-  const [isApiKeyLocked, setIsApiKeyLocked] = useState<boolean>(!!modelConfig.apiKey?.trim());
-  const [isLockButtonVibrating, setIsLockButtonVibrating] = useState<boolean>(false);
   const { serverAddress } = useSidebar();
   const [openRouterModels, setOpenRouterModels] = useState<OpenRouterModel[]>([]);
   const [openRouterError, setOpenRouterError] = useState<string>('');
@@ -213,13 +211,7 @@ export function ModelSettingsModal({
     }
   };
 
-  // Auto-unlock when API key becomes empty, 
-  useEffect(() => {
-    const hasContent = !!apiKey?.trim();
-    if (!hasContent) {
-      setIsApiKeyLocked(false);
-    }
-  }, [apiKey]);
+
 
   const modelOptions: Record<string, string[]> = {
     ollama: models.map((model) => model.name),
@@ -405,7 +397,6 @@ export function ModelSettingsModal({
       const correctKey = providerApiKeys[modelConfig.provider as keyof typeof providerApiKeys];
       if (correctKey !== apiKey) {
         setApiKey(correctKey || '');
-        setIsApiKeyLocked(!!correctKey?.trim());
       }
     }
   }, [modelConfig.provider, providerApiKeys, requiresApiKey]);
@@ -689,12 +680,7 @@ export function ModelSettingsModal({
     }
   };
 
-  const handleInputClick = () => {
-    if (isApiKeyLocked) {
-      setIsLockButtonVibrating(true);
-      setTimeout(() => setIsLockButtonVibrating(false), 500);
-    }
-  };
+
 
   // Function to download recommended model
   const downloadRecommendedModel = async () => {
@@ -1071,44 +1057,10 @@ export function ModelSettingsModal({
         {requiresApiKey && (
           <div>
             <Label>API Key</Label>
-            <div className="relative mt-1">
-              <Input
-                type={showApiKey ? 'text' : 'password'}
-                value={apiKey || ''}
-                onChange={(e) => setApiKey(e.target.value)}
-                disabled={isApiKeyLocked}
-                placeholder="Enter your API key"
-                className="pr-24"
-              />
-              {isApiKeyLocked && apiKey?.trim() && (
-                <div
-                  onClick={handleInputClick}
-                  className="absolute inset-0 flex items-center justify-center bg-muted/50 rounded-md cursor-not-allowed"
-                />
-              )}
-              <div className="absolute inset-y-0 right-0 pr-1 flex items-center space-x-1">
-                {apiKey?.trim() && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setIsApiKeyLocked(!isApiKeyLocked)}
-                    className={isLockButtonVibrating ? 'animate-vibrate text-red-500' : ''}
-                    title={isApiKeyLocked ? 'Unlock to edit' : 'Lock to prevent editing'}
-                  >
-                    {isApiKeyLocked ? <Lock /> : <Unlock />}
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                >
-                  {showApiKey ? <EyeOff /> : <Eye />}
-                </Button>
-              </div>
-            </div>
+            <ApiKeyInput
+              value={apiKey}
+              onChange={setApiKey}
+            />
           </div>
         )}
 
