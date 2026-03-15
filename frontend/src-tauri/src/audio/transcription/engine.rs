@@ -135,21 +135,21 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
                 }
             }
         }
-        "runpod" => {
-            info!("🔍 Validating RunPod configuration...");
+        "remote" => {
+            info!("🔍 Validating remote transcription configuration...");
             if config.model.is_empty() {
-                return Err("RunPod endpoint ID not configured. Please enter your endpoint ID in settings.".to_string());
+                return Err("Remote transcription URL not configured. Please enter the endpoint URL in settings.".to_string());
             }
             if config.api_key.as_ref().map_or(true, |k| k.is_empty()) {
-                return Err("RunPod API key not configured. Please enter your API key in settings.".to_string());
+                return Err("Remote transcription API key not configured. Please enter your API key in settings.".to_string());
             }
-            info!("✅ RunPod configuration valid for endpoint: {}", config.model);
+            info!("✅ Remote transcription configuration valid for URL: {}", config.model);
             Ok(())
         }
         other => {
             warn!("❌ Unsupported transcription provider for local recording: {}", other);
             Err(format!(
-                "Provider '{}' is not supported for local transcription. Please select 'localWhisper' or 'parakeet'.",
+                "Provider '{}' is not supported for local transcription. Please select 'localWhisper', 'parakeet', or 'remote'.",
                 other
             ))
         }
@@ -223,15 +223,15 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
                 }
             }
         }
-        "runpod" => {
-            info!("☁️ Initializing RunPod transcription engine");
-            let endpoint_id = config.model.clone();
+        "remote" => {
+            info!("☁️ Initializing remote transcription engine");
+            let url = config.model.clone();
             let api_key = config.api_key.unwrap_or_default();
-            if endpoint_id.is_empty() || api_key.is_empty() {
-                return Err("RunPod endpoint ID and API key must be configured in settings.".to_string());
+            if url.is_empty() || api_key.is_empty() {
+                return Err("Remote transcription URL and API key must be configured in settings.".to_string());
             }
-            let provider = super::runpod_provider::RunPodProvider::new(endpoint_id, api_key)
-                .map_err(|e| format!("Failed to create RunPod provider: {}", e))?;
+            let provider = super::remote_provider::RemoteProvider::new(url, api_key)
+                .map_err(|e| format!("Failed to create remote transcription provider: {}", e))?;
             Ok(TranscriptionEngine::Provider(Arc::new(provider)))
         }
         "localWhisper" => {
@@ -241,7 +241,7 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
         }
         other => {
             Err(format!(
-                "Unsupported transcription provider '{}'. Supported: parakeet, localWhisper, runpod.",
+                "Unsupported transcription provider '{}'. Supported: parakeet, localWhisper, remote.",
                 other
             ))
         }

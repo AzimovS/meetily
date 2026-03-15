@@ -4,7 +4,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Button } from './ui/button';
-import { ApiKeyInput } from './ui/ApiKeyInput';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
 import { cn } from '@/lib/utils';
@@ -12,7 +11,7 @@ import { toast } from 'sonner';
 
 
 export interface TranscriptModelProps {
-    provider: 'localWhisper' | 'parakeet' | 'voxtral' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
+    provider: 'localWhisper' | 'parakeet' | 'remote' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
     model: string;
     apiKey?: string | null;
 }
@@ -112,11 +111,11 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                 setUiApiKey(null);
                                 setApiKeyDirty(false);
 
-                                if (provider === 'voxtral') {
-                                    const existingUrl = transcriptModelConfig.provider === 'voxtral'
+                                if (provider === 'remote') {
+                                    const existingUrl = transcriptModelConfig.provider === 'remote'
                                         ? transcriptModelConfig.model : '';
                                     setUiModel(existingUrl);
-                                    fetchApiKey('voxtral');
+                                    fetchApiKey('remote');
                                 } else if (LOCAL_PROVIDERS.has(provider)) {
                                     const existingModel = transcriptModelConfig.provider === provider
                                         ? transcriptModelConfig.model : '';
@@ -130,7 +129,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                             <SelectContent>
                                 <SelectItem value="parakeet">Parakeet (Recommended - Real-time / Accurate)</SelectItem>
                                 <SelectItem value="localWhisper">Local Whisper (High Accuracy)</SelectItem>
-                                <SelectItem value="voxtral">Voxtral (Remote)</SelectItem>
+                                <SelectItem value="remote">Remote Transcription</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>
@@ -156,7 +155,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                     </div>
                 )}
 
-                {uiProvider === 'voxtral' && (
+                {uiProvider === 'remote' && (
                     <div>
                         <Label>Endpoint URL</Label>
                         <Input
@@ -167,7 +166,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                             placeholder="e.g. https://your-server/v1/audio/transcriptions"
                         />
                         <p className="text-xs text-muted-foreground mt-1">
-                            The full URL of your Voxtral-compatible transcription endpoint
+                            The full URL of your OpenAI-compatible transcription endpoint
                         </p>
                     </div>
                 )}
@@ -175,12 +174,15 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                 {requiresApiKey && (
                     <div>
                         <Label>API Key</Label>
-                        <ApiKeyInput
-                            value={uiApiKey}
-                            onChange={(value) => {
-                                setUiApiKey(value);
+                        <Input
+                            type="password"
+                            value={uiApiKey || ''}
+                            onChange={(e) => {
+                                setUiApiKey(e.target.value);
                                 setApiKeyDirty(true);
                             }}
+                            placeholder="Enter your API key"
+                            className="mt-1"
                         />
                     </div>
                 )}

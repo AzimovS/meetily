@@ -1,41 +1,39 @@
-// audio/transcription/runpod_provider.rs
+// audio/transcription/remote_provider.rs
 //
-// RunPod remote transcription provider. Sends audio chunks to a RunPod
-// serverless endpoint running faster-whisper and returns the transcription.
+// Remote transcription provider. Sends audio as a WAV file via
+// multipart form upload to an OpenAI-compatible endpoint and returns
+// the transcription.
 
 use super::provider::{TranscriptionError, TranscriptionProvider, TranscriptResult};
 use async_trait::async_trait;
 use log::{info, warn};
 
-/// RunPod serverless transcription provider
-pub struct RunPodProvider {
-    endpoint_id: String,
+/// Remote transcription provider
+pub struct RemoteProvider {
+    url: String,
     api_key: String,
     client: reqwest::Client,
 }
 
-impl RunPodProvider {
-    pub fn new(endpoint_id: String, api_key: String) -> Result<Self, String> {
-        // Validate endpoint ID contains only safe characters (alphanumeric, hyphens, underscores)
-        if endpoint_id.is_empty() || !endpoint_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-            return Err(format!("Invalid RunPod endpoint ID: must be alphanumeric (hyphens/underscores allowed), got '{}'", endpoint_id));
+impl RemoteProvider {
+    pub fn new(url: String, api_key: String) -> Result<Self, String> {
+        if url.is_empty() {
+            return Err("Remote transcription URL not configured".to_string());
         }
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(60))
             .build()
             .unwrap_or_default();
-        info!("RunPod provider initialized for endpoint: {}", endpoint_id);
+        info!("Remote transcription provider initialized for URL: {}", url);
         Ok(Self {
-            endpoint_id,
+            url,
             api_key,
             client,
         })
     }
 
-    /// Encode f32 audio samples as a 16kHz mono 16-bit PCM WAV, then base64-encode it.
-    fn encode_audio_base64(audio: &[f32]) -> Result<String, TranscriptionError> {
-        use base64::{engine::general_purpose::STANDARD, Engine};
-
+    /// Encode f32 audio samples as a 16kHz mono 16-bit PCM WAV.
+    fn encode_audio_wav(audio: &[f32]) -> Result<Vec<u8>, TranscriptionError> {
         let num_samples = audio.len();
         let data_size = num_samples * 2; // 16-bit = 2 bytes per sample
         let file_size = 36 + data_size;
@@ -68,74 +66,59 @@ impl RunPodProvider {
             wav.extend_from_slice(&i16_val.to_le_bytes());
         }
 
-        Ok(STANDARD.encode(&wav))
+        Ok(wav)
     }
 }
 
 #[async_trait]
-impl TranscriptionProvider for RunPodProvider {
+impl TranscriptionProvider for RemoteProvider {
     async fn transcribe(
         &self,
         audio: Vec<f32>,
-        language: Option<String>,
+        _language: Option<String>,
     ) -> std::result::Result<TranscriptResult, TranscriptionError> {
-        let audio_base64 = Self::encode_audio_base64(&audio)?;
+        let wav_bytes = Self::encode_audio_wav(&audio)?;
 
-        let url = format!(
-            "https://api.runpod.ai/v2/{}/runsync",
-            self.endpoint_id
-        );
+        let file_part = reqwest::multipart::Part::bytes(wav_bytes)
+            .file_name("audio.wav")
+            .mime_str("audio/wav")
+            .map_err(|e| {
+                TranscriptionError::EngineFailed(format!("Failed to build multipart: {}", e))
+            })?;
 
-        let lang = language.unwrap_or_else(|| "en".to_string());
-
-        let body = serde_json::json!({
-            "input": {
-                "audio_base64": audio_base64,
-                "language": lang,
-                "transcription": "plain_text",
-                "enable_vad": true
-            }
-        });
+        let form = reqwest::multipart::Form::new()
+            .part("file", file_part);
 
         let response = self
             .client
-            .post(&url)
+            .post(&self.url)
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
+            .multipart(form)
             .send()
             .await
             .map_err(|e| {
-                warn!("RunPod request failed: {}", e);
-                TranscriptionError::EngineFailed(format!("RunPod request failed: {}", e))
+                warn!("Remote transcription request failed: {}", e);
+                TranscriptionError::EngineFailed(format!("Remote transcription request failed: {}", e))
             })?;
 
         let status = response.status();
         let response_text = response.text().await.map_err(|e| {
-            TranscriptionError::EngineFailed(format!("Failed to read RunPod response: {}", e))
+            TranscriptionError::EngineFailed(format!("Failed to read remote transcription response: {}", e))
         })?;
 
         if !status.is_success() {
-            warn!("RunPod returned HTTP {}: {}", status, response_text);
+            warn!("Remote transcription returned HTTP {}: {}", status, response_text);
             return Err(TranscriptionError::EngineFailed(format!(
-                "RunPod returned HTTP {}",
+                "Remote transcription returned HTTP {}",
                 status
             )));
         }
 
         let json: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
-            TranscriptionError::EngineFailed(format!("Invalid RunPod response JSON: {}", e))
+            TranscriptionError::EngineFailed(format!("Invalid remote transcription response JSON: {}", e))
         })?;
 
-        let runpod_status = json["status"].as_str().unwrap_or("UNKNOWN");
-        if runpod_status != "COMPLETED" {
-            warn!("RunPod job status: {}", runpod_status);
-            return Err(TranscriptionError::EngineFailed(format!(
-                "RunPod job status: {}",
-                runpod_status
-            )));
-        }
-
-        let text = json["output"]["transcription"]
+        let text = json["text"]
             .as_str()
             .unwrap_or("")
             .trim()
@@ -153,10 +136,10 @@ impl TranscriptionProvider for RunPodProvider {
     }
 
     async fn get_current_model(&self) -> Option<String> {
-        Some(format!("runpod:{}", self.endpoint_id))
+        Some("remote".to_string())
     }
 
     fn provider_name(&self) -> &'static str {
-        "RunPod"
+        "Remote"
     }
 }
