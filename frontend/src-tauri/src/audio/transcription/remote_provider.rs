@@ -20,10 +20,31 @@ impl RemoteProvider {
         if url.is_empty() {
             return Err("Remote transcription URL not configured".to_string());
         }
+        if api_key.is_empty() {
+            return Err("Remote transcription API key not configured".to_string());
+        }
+
+        // Validate URL scheme — require HTTPS except for localhost
+        match url::Url::parse(&url) {
+            Ok(parsed) => {
+                let is_localhost = parsed.host_str()
+                    .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
+                    .unwrap_or(false);
+                if parsed.scheme() != "https" && !is_localhost {
+                    return Err(format!(
+                        "Remote transcription URL must use HTTPS (got '{}://'). HTTP is only allowed for localhost.",
+                        parsed.scheme()
+                    ));
+                }
+            }
+            Err(e) => return Err(format!("Invalid remote transcription URL: {}", e)),
+        }
+
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(15))
             .build()
-            .unwrap_or_default();
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
         info!("Remote transcription provider initialized for URL: {}", url);
         Ok(Self {
             url,
@@ -33,7 +54,7 @@ impl RemoteProvider {
     }
 
     /// Encode f32 audio samples as a 16kHz mono 16-bit PCM WAV.
-    fn encode_audio_wav(audio: &[f32]) -> Result<Vec<u8>, TranscriptionError> {
+    fn encode_audio_wav(audio: &[f32]) -> Vec<u8> {
         let num_samples = audio.len();
         let data_size = num_samples * 2; // 16-bit = 2 bytes per sample
         let file_size = 36 + data_size;
@@ -66,7 +87,7 @@ impl RemoteProvider {
             wav.extend_from_slice(&i16_val.to_le_bytes());
         }
 
-        Ok(wav)
+        wav
     }
 }
 
@@ -75,9 +96,9 @@ impl TranscriptionProvider for RemoteProvider {
     async fn transcribe(
         &self,
         audio: Vec<f32>,
-        _language: Option<String>,
+        language: Option<String>,
     ) -> std::result::Result<TranscriptResult, TranscriptionError> {
-        let wav_bytes = Self::encode_audio_wav(&audio)?;
+        let wav_bytes = Self::encode_audio_wav(&audio);
 
         let file_part = reqwest::multipart::Part::bytes(wav_bytes)
             .file_name("audio.wav")
@@ -86,8 +107,13 @@ impl TranscriptionProvider for RemoteProvider {
                 TranscriptionError::EngineFailed(format!("Failed to build multipart: {}", e))
             })?;
 
-        let form = reqwest::multipart::Form::new()
+        let mut form = reqwest::multipart::Form::new()
             .part("file", file_part);
+
+        // Forward language parameter if provided (OpenAI-compatible endpoints accept this)
+        if let Some(lang) = language {
+            form = form.text("language", lang);
+        }
 
         let response = self
             .client
@@ -107,7 +133,13 @@ impl TranscriptionProvider for RemoteProvider {
         })?;
 
         if !status.is_success() {
-            warn!("Remote transcription returned HTTP {}: {}", status, response_text);
+            // Truncate response body to avoid leaking sensitive data in logs
+            let truncated = if response_text.len() > 500 {
+                format!("{}...(truncated)", &response_text[..500])
+            } else {
+                response_text.clone()
+            };
+            warn!("Remote transcription returned HTTP {}: {}", status, truncated);
             return Err(TranscriptionError::EngineFailed(format!(
                 "Remote transcription returned HTTP {}",
                 status

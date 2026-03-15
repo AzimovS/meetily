@@ -137,12 +137,11 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
         }
         "remote" => {
             info!("🔍 Validating remote transcription configuration...");
-            if config.model.is_empty() {
-                return Err("Remote transcription URL not configured. Please enter the endpoint URL in settings.".to_string());
-            }
-            if config.api_key.as_ref().map_or(true, |k| k.is_empty()) {
-                return Err("Remote transcription API key not configured. Please enter your API key in settings.".to_string());
-            }
+            // Delegate to RemoteProvider::new for validation (single source of truth)
+            super::remote_provider::RemoteProvider::new(
+                config.model.clone(),
+                config.api_key.clone().unwrap_or_default(),
+            )?;
             info!("✅ Remote transcription configuration valid for URL: {}", config.model);
             Ok(())
         }
@@ -225,13 +224,10 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
         }
         "remote" => {
             info!("☁️ Initializing remote transcription engine");
-            let url = config.model.clone();
-            let api_key = config.api_key.unwrap_or_default();
-            if url.is_empty() || api_key.is_empty() {
-                return Err("Remote transcription URL and API key must be configured in settings.".to_string());
-            }
-            let provider = super::remote_provider::RemoteProvider::new(url, api_key)
-                .map_err(|e| format!("Failed to create remote transcription provider: {}", e))?;
+            let provider = super::remote_provider::RemoteProvider::new(
+                config.model.clone(),
+                config.api_key.unwrap_or_default(),
+            ).map_err(|e| format!("Failed to create remote transcription provider: {}", e))?;
             Ok(TranscriptionEngine::Provider(Arc::new(provider)))
         }
         "localWhisper" => {
