@@ -1,10 +1,10 @@
 [package]
 name = "meetily"
-version = "0.3.0"
+version = "0.1.0"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
-repository = "https://github.com/Zackriya-Solutions/meeting-minutes"
+repository = "https://github.com/AzimovS/meetily"
 edition = "2021"
 rust-version = "1.77"
 

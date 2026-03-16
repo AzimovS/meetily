@@ -424,6 +424,8 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 
 7. **Audio Permissions**: Request permissions early. macOS requires both microphone AND screen recording for system audio.
 
+8. **SQLite Migrations (sqlx)**: Never use bare `ALTER TABLE ADD COLUMN` — it's non-idempotent and fails on re-run. Always use the table-recreation pattern: `CREATE TABLE IF NOT EXISTS _new` → `INSERT OR IGNORE` → `DROP TABLE` → `ALTER TABLE RENAME`. See `20260306000000_add_runpod_api_key.sql` and `20250920155811_add_openrouter_api_key.sql` for examples. Never modify a committed migration file (sqlx checksums will break).
+
 ## Repository-Specific Conventions
 
 - **Logging Format**: Backend uses detailed formatting with filename:line:function
