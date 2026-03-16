@@ -32,11 +32,6 @@ impl DatabaseManager {
 
         let pool = SqlitePool::connect(tauri_db_path).await?;
 
-        // The original migration 20260305000000 was replaced by 20260306000000
-        // with an idempotent table-recreation pattern. Clean up the old record
-        // if it exists so sqlx doesn't error about a missing migration file.
-        Self::cleanup_old_migration_record(&pool).await;
-
         sqlx::migrate!("./migrations").run(&pool).await?;
 
         Ok(DatabaseManager { pool })
@@ -160,18 +155,6 @@ impl DatabaseManager {
 
         // Now use the standard initialization which will detect and migrate the legacy db
         Self::new_from_app_handle(app_handle).await
-    }
-
-    /// The original migration 20260305000000 was replaced by 20260306000000 with
-    /// an idempotent table-recreation pattern. Clean up the old record if it exists
-    /// so sqlx doesn't error about a missing migration file.
-    async fn cleanup_old_migration_record(pool: &SqlitePool) {
-        let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260305000000")
-            .execute(pool)
-            .await;
-        let _ = sqlx::query("DROP TABLE IF EXISTS transcript_settings_fixup")
-            .execute(pool)
-            .await;
     }
 
     pub fn pool(&self) -> &SqlitePool {
