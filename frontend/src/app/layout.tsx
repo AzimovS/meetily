@@ -5,7 +5,6 @@ import { Source_Sans_3 } from 'next/font/google'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
-import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { Toaster, toast } from 'sonner'
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
@@ -233,8 +232,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
-        <AnalyticsProvider>
-          <RecordingStateProvider>
+        <RecordingStateProvider>
             <TranscriptProvider>
               <ConfigProvider>
                 <OllamaDownloadProvider>
@@ -274,7 +272,6 @@ export default function RootLayout({
               </ConfigProvider>
             </TranscriptProvider>
           </RecordingStateProvider>
-        </AnalyticsProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
       </body>
