@@ -172,24 +172,6 @@ try {
     Write-Host "./build_whisper.cmd"
     Write-Host ""
    
-    try {
-        $postHogData = @{
-            api_key    = ""
-            event      = "cli_install"
-            properties = @{
-                distinct_id = $env:COMPUTERNAME
-                version     = $latestRelease.tag_name
-                os          = "windows"
-                arch        = "x86_64"
-            }
-        } | ConvertTo-Json
-
-        Write-Host "Tracking installation..."
-        Write-Host $postHogData
-    } catch {
-        # Silently continue if tracking fails
-    }
-
 } catch {
     Write-Host "Installation failed: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
