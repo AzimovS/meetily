@@ -540,7 +540,7 @@ jobs:
           Get-ChildItem "frontend/src-tauri/binaries/"
 
       - name: Build llama-helper sidecar (macOS/Linux)
-        if: "!contains(inputs.platform, 'windows')"
+        if: "!contains(inputs.platform, 'windows') && !(contains(inputs.platform, 'macos') && inputs.sign-binaries)"
         shell: bash
         run: |
           echo "Building llama-helper sidecar..."
@@ -569,6 +569,26 @@ jobs:
 
           echo "Copied llama-helper to frontend/src-tauri/binaries/llama-helper-${TARGET}"
           ls -la frontend/src-tauri/binaries/
+
+      - name: Remove externalBin for macOS signed builds (notarization workaround)
+        if: contains(inputs.platform, 'macos') && inputs.sign-binaries
+        shell: bash
+        run: |
+          echo "Removing externalBin from tauri.conf.json to avoid notarization issues with sidecars"
+          cd frontend/src-tauri
+          # Remove the externalBin array to prevent sidecar notarization issues
+          python3 -c "
+          import json
+          with open('tauri.conf.json', 'r') as f:
+              config = json.load(f)
+          if 'externalBin' in config.get('bundle', {}):
+              del config['bundle']['externalBin']
+              print('Removed externalBin from bundle config')
+          with open('tauri.conf.json', 'w') as f:
+              json.dump(config, f, indent=4)
+          "
+          echo "Updated tauri.conf.json:"
+          grep -A2 '"bundle"' tauri.conf.json | head -10
 
       - name: Cache FFmpeg binary
         uses: actions/cache@v4
