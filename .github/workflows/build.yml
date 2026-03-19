@@ -461,12 +461,9 @@ jobs:
           echo "CERT_ID=$CERT_ID" >> "$GITHUB_ENV"
           echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
           echo "Certificate imported: $CERT_ID"
-          # NOTE: APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID are intentionally NOT set.
-          # Tauri skips notarization when these are absent.
-          # Re-enable notarization when Apple's notary service stabilizes by uncommenting:
-          # echo "APPLE_ID=${{ secrets.APPLE_ID }}" >> "$GITHUB_ENV"
-          # echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}" >> "$GITHUB_ENV"
-          # echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
+          echo "APPLE_ID=${{ secrets.APPLE_ID }}" >> "$GITHUB_ENV"
+          echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
 
       - name: Configure build acceleration
         if: contains(inputs.platform, 'macos')
