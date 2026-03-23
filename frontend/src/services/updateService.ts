@@ -61,7 +61,16 @@ export class UpdateService {
 
     try {
       const currentVersion = await getVersion();
+      console.log(`[Updater] Current app version: ${currentVersion}`);
+
       const update = await check();
+      console.log(`[Updater] check() result:`, JSON.stringify({
+        isNull: update === null,
+        available: update?.available,
+        version: update?.version,
+        currentVersion: update?.currentVersion,
+        date: update?.date,
+      }));
 
       if (update?.available) {
         return {
@@ -78,7 +87,7 @@ export class UpdateService {
         currentVersion,
       };
     } catch (error) {
-      console.error('Failed to check for updates:', error);
+      console.error('[Updater] check() threw error:', error);
       throw error;
     } finally {
       this.updateCheckInProgress = false;
