@@ -7,8 +7,9 @@ use super::provider::TranscriptionError;
 use crate::audio::AudioChunk;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
 
 // Sequence counter for transcript updates
@@ -17,10 +18,108 @@ static SEQUENCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 // Speech detection flag - reset per recording session
 static SPEECH_DETECTED_EMITTED: AtomicBool = AtomicBool::new(false);
 
+// Global echo deduplicator - shared across worker iterations
+static ECHO_DEDUP: std::sync::LazyLock<Mutex<EchoDeduplicator>> =
+    std::sync::LazyLock::new(|| Mutex::new(EchoDeduplicator::new()));
+
+/// Text-based echo deduplication.
+/// When system audio plays through speakers, the mic picks it up and Whisper
+/// transcribes it as "You". This deduplicator compares "You" transcripts against
+/// recent "Others" transcripts and drops duplicates.
+struct EchoDeduplicator {
+    /// Recent "Others" segments: (normalized_text, audio_start_time)
+    others_buffer: VecDeque<(Vec<String>, f64)>,
+    max_buffer_size: usize,
+    time_window_secs: f64,
+}
+
+impl EchoDeduplicator {
+    fn new() -> Self {
+        Self {
+            others_buffer: VecDeque::new(),
+            max_buffer_size: 30,
+            time_window_secs: 3.0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.others_buffer.clear();
+    }
+
+    /// Record an "Others" segment for future comparison
+    fn record_others(&mut self, text: &str, start_time: f64) {
+        let words = Self::normalize_to_words(text);
+        if !words.is_empty() {
+            self.others_buffer.push_back((words, start_time));
+            if self.others_buffer.len() > self.max_buffer_size {
+                self.others_buffer.pop_front();
+            }
+        }
+    }
+
+    /// Check if a "You" segment is an echo of a recent "Others" segment
+    fn is_echo(&self, text: &str, start_time: f64) -> bool {
+        let you_words = Self::normalize_to_words(text);
+        if you_words.len() < 2 { return false; } // Single words too ambiguous
+
+        // Length-adaptive threshold
+        let threshold = if you_words.len() <= 3 { 0.75 }
+                        else if you_words.len() <= 6 { 0.65 }
+                        else { 0.55 };
+
+        for (other_words, other_time) in &self.others_buffer {
+            if (start_time - other_time).abs() > self.time_window_secs {
+                continue;
+            }
+            let sim = Self::bag_jaccard(&you_words, other_words);
+            if sim >= threshold {
+                info!("🔇 Echo detected: '{}' matches Others segment (similarity={:.2})", text, sim);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn normalize_to_words(text: &str) -> Vec<String> {
+        text.to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>()
+            .split_whitespace()
+            .filter(|w| !w.is_empty())
+            .map(|w| w.to_string())
+            .collect()
+    }
+
+    fn bag_jaccard(a: &[String], b: &[String]) -> f64 {
+        let mut count_a: HashMap<&str, usize> = HashMap::new();
+        let mut count_b: HashMap<&str, usize> = HashMap::new();
+        for w in a { *count_a.entry(w.as_str()).or_default() += 1; }
+        for w in b { *count_b.entry(w.as_str()).or_default() += 1; }
+
+        let all_keys: std::collections::HashSet<&str> =
+            count_a.keys().chain(count_b.keys()).copied().collect();
+
+        let mut intersection = 0usize;
+        let mut union_size = 0usize;
+        for key in all_keys {
+            let ca = count_a.get(key).copied().unwrap_or(0);
+            let cb = count_b.get(key).copied().unwrap_or(0);
+            intersection += ca.min(cb);
+            union_size += ca.max(cb);
+        }
+        if union_size == 0 { 0.0 } else { intersection as f64 / union_size as f64 }
+    }
+}
+
 /// Reset the speech detected flag for a new recording session
 pub fn reset_speech_detected_flag() {
     SPEECH_DETECTED_EMITTED.store(false, Ordering::SeqCst);
     info!("🔍 SPEECH_DETECTED_EMITTED reset to: {}", SPEECH_DETECTED_EMITTED.load(Ordering::SeqCst));
+    // Also reset echo deduplicator
+    if let Ok(mut dedup) = ECHO_DEDUP.lock() {
+        dedup.reset();
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -36,6 +135,8 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,          // Segment duration in seconds (e.g., 3.3)
+    // Speaker attribution from audio source
+    pub speaker: String, // "You" (mic) or "Others" (system audio)
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
@@ -142,6 +243,10 @@ pub fn start_transcription_task<R: Runtime>(
 
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+                            let speaker = match chunk.device_type {
+                                crate::audio::RecordingDeviceType::Microphone => "You".to_string(),
+                                crate::audio::RecordingDeviceType::System => "Others".to_string(),
+                            };
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(
@@ -191,19 +296,23 @@ pub fn start_transcription_task<R: Runtime>(
                                             info!("🔍 Speech already detected in this session, not re-emitting");
                                         }
 
-                                        // Generate sequence ID and calculate timestamps FIRST
+                                        // Echo deduplication: check "You" segments against recent "Others"
+                                        let audio_start_time = chunk_timestamp;
+                                        if let Ok(mut dedup) = ECHO_DEDUP.lock() {
+                                            if speaker == "Others" {
+                                                dedup.record_others(&transcript, audio_start_time);
+                                            } else if speaker == "You" && dedup.is_echo(&transcript, audio_start_time) {
+                                                // This "You" segment is echo of system audio - skip it
+                                                chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
+                                                continue;
+                                            }
+                                        }
+
+                                        // Generate sequence ID and calculate timestamps
                                         let sequence_id = SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
-                                        let audio_start_time = chunk_timestamp; // Already in seconds from recording start
                                         let audio_end_time = chunk_timestamp + chunk_duration;
 
-                                        // Save structured transcript segment to recording manager (only final results)
-                                        // Save ALL segments (partial and final) to ensure complete JSON
-                                        // Create structured segment with full timestamp data
-                                        // NOTE: This is now handled via the transcript-update event emission below
-                                        // The recording_commands module listens to these events and saves them
-                                        // This decouples the transcription worker from direct RECORDING_MANAGER access
-
-                                        // Emit transcript update with NEW recording-relative timestamps
+                                        // Emit transcript update
 
                                         let update = TranscriptUpdate {
                                             text: transcript,
@@ -217,6 +326,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             audio_start_time,
                                             audio_end_time,
                                             duration: chunk_duration,
+                                            speaker: speaker.clone(),
                                         };
 
                                         if let Err(e) = app_clone.emit("transcript-update", &update)
