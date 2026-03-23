@@ -31,16 +31,20 @@ export function About() {
     const handleCheckForUpdates = async () => {
         setIsChecking(true);
         try {
+            const currentVer = await getVersion();
+            toast.info(`Current version: v${currentVer}. Checking for updates...`);
+
             const info = await updateService.checkForUpdates(true);
             setUpdateInfo(info);
             if (info.available) {
+                toast.success(`Update found: v${info.version}`);
                 setShowUpdateDialog(true);
             } else {
-                toast.success('You are running the latest version');
+                toast.success(`v${currentVer} is the latest version`);
             }
         } catch (error: any) {
             console.error('Failed to check for updates:', error);
-            toast.error('Failed to check for updates: ' + (error.message || 'Unknown error'));
+            toast.error('Update check failed: ' + (error.message || String(error)));
         } finally {
             setIsChecking(false);
         }
