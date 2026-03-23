@@ -29,7 +29,7 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
       const info = await updateService.checkForUpdates(force);
       setUpdateInfo(info);
 
-      if (info.available) {
+      if (info?.available) {
         if (onUpdateAvailable) {
           onUpdateAvailable(info);
         } else if (showNotification) {

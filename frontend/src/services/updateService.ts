@@ -64,15 +64,10 @@ export class UpdateService {
       console.log(`[Updater] Current app version: ${currentVersion}`);
 
       const update = await check();
-      console.log(`[Updater] check() result:`, JSON.stringify({
-        isNull: update === null,
-        available: update?.available,
-        version: update?.version,
-        currentVersion: update?.currentVersion,
-        date: update?.date,
-      }));
 
-      if (update?.available) {
+      // check() returns null when no update is available, or an Update object
+      if (update && update.available) {
+        console.log(`[Updater] Update available: ${update.version}`);
         return {
           available: true,
           currentVersion,
@@ -82,6 +77,7 @@ export class UpdateService {
         };
       }
 
+      console.log(`[Updater] No update available (check returned ${update === null ? 'null' : 'object with available=false'})`);
       return {
         available: false,
         currentVersion,
