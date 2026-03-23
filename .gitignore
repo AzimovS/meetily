@@ -25,6 +25,9 @@
 # production
 /build
 
+# plans (keep docs/solutions/ tracked)
+docs/plans/
+
 # misc
 .DS_Store
 *.pem
