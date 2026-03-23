@@ -1,6 +1,68 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex as StdMutex;
+
+/// Debug command to manually test updater connectivity and version comparison.
+/// Bypasses the Tauri updater plugin entirely to diagnose issues.
+#[tauri::command]
+async fn debug_check_update() -> Result<String, String> {
+    let url = "https://github.com/AzimovS/meetily/releases/latest/download/latest.json";
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    let mut report = format!("=== Updater Debug Report ===\n");
+    report.push_str(&format!("Compiled version: {}\n", current_version));
+    report.push_str(&format!("Endpoint: {}\n\n", url));
+
+    // Step 1: Fetch latest.json
+    let client = reqwest::Client::builder()
+        .user_agent("tauri-plugin-updater/debug")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client.get(url).send().await
+        .map_err(|e| format!("HTTP request FAILED: {} (this means network is blocked or endpoint unreachable)", e))?;
+
+    let status = response.status();
+    report.push_str(&format!("HTTP status: {}\n", status));
+
+    if !status.is_success() {
+        report.push_str(&format!("ERROR: Non-success status. Body: {}\n",
+            response.text().await.unwrap_or_default()));
+        return Ok(report);
+    }
+
+    let body = response.text().await
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    // Step 2: Parse JSON
+    let json: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse JSON: {}. Body: {}", e, &body[..200.min(body.len())]))?;
+
+    let remote_version = json["version"].as_str().unwrap_or("MISSING");
+    report.push_str(&format!("Remote version: {}\n", remote_version));
+
+    // Step 3: Check platforms
+    if let Some(platforms) = json["platforms"].as_object() {
+        report.push_str(&format!("Platforms: {:?}\n", platforms.keys().collect::<Vec<_>>()));
+        if let Some(darwin) = platforms.get("darwin-aarch64") {
+            report.push_str(&format!("darwin-aarch64 URL: {}\n",
+                darwin["url"].as_str().unwrap_or("MISSING")));
+            report.push_str(&format!("darwin-aarch64 sig length: {}\n",
+                darwin["signature"].as_str().map(|s| s.len()).unwrap_or(0)));
+        } else {
+            report.push_str("ERROR: darwin-aarch64 platform MISSING\n");
+        }
+    } else {
+        report.push_str("ERROR: No platforms object in JSON\n");
+    }
+
+    // Step 4: Version comparison
+    let remote_clean = remote_version.trim_start_matches('v');
+    report.push_str(&format!("\nVersion comparison: {} (remote) vs {} (current)\n", remote_clean, current_version));
+    report.push_str(&format!("Update available: {}\n", remote_clean != current_version && remote_clean > current_version));
+
+    Ok(report)
+}
 // Removed unused import
 
 // Performance optimization: Conditional logging macros for hot paths
@@ -494,6 +556,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            debug_check_update,
             start_recording,
             stop_recording,
             is_recording,
