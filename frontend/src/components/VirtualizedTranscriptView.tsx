@@ -63,6 +63,17 @@ function cleanStopWords(text: string): string {
     return cleanedText.replace(/\s+/g, ' ').trim();
 }
 
+// Speaker label colors
+const SPEAKER_COLORS: Record<string, { border: string; text: string }> = {
+    'You': { border: 'border-l-blue-500', text: 'text-blue-600' },
+    'Others': { border: 'border-l-orange-500', text: 'text-orange-600' },
+};
+
+function getSpeakerStyle(speaker?: string) {
+    if (!speaker) return { border: '', text: '' };
+    return SPEAKER_COLORS[speaker] ?? { border: 'border-l-gray-400', text: 'text-gray-500' };
+}
+
 // Memoized transcript segment component
 const TranscriptSegment = memo(function TranscriptSegment({
     id,
@@ -71,6 +82,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence,
     isStreaming,
     showConfidence,
+    speaker,
 }: {
     id: string;
     timestamp: number;
@@ -78,15 +90,17 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence?: number;
     isStreaming: boolean;
     showConfidence: boolean;
+    speaker?: string;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
+    const speakerStyle = getSpeakerStyle(speaker);
 
     return (
-        <div id={`segment-${id}`} className="mb-3">
-            <div className="flex items-start gap-2">
+        <div id={`segment-${id}`} className={`mb-4 ${speaker ? `border-l-[3px] ${speakerStyle.border} pl-3` : ''}`}>
+            <div className="flex items-start gap-3">
                 <Tooltip>
                     <TooltipTrigger>
-                        <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
+                        <span className="text-xs text-gray-400 mt-0.5 flex-shrink-0 min-w-[50px]">
                             {formatRecordingTime(timestamp)}
                         </span>
                     </TooltipTrigger>
@@ -97,12 +111,17 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">
+                    {speaker && (
+                        <span className={`text-xs font-semibold ${speakerStyle.text} mb-1 block`}>
+                            {speaker}
+                        </span>
+                    )}
                     {isStreaming ? (
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
-                            <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
+                            <p className="text-sm text-gray-800 leading-relaxed">{displayText}</p>
                         </div>
                     ) : (
-                        <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
+                        <p className="text-sm text-gray-800 leading-relaxed">{displayText}</p>
                     )}
                 </div>
             </div>
@@ -296,6 +315,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        speaker={segment.speaker}
                                     />
                                 </div>
                             );
@@ -352,6 +372,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        speaker={segment.speaker}
                                     />
                                 </motion.div>
                             );

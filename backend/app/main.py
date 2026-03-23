@@ -62,6 +62,7 @@ class Transcript(BaseModel):
     audio_start_time: Optional[float] = None
     audio_end_time: Optional[float] = None
     duration: Optional[float] = None
+    speaker: Optional[str] = None  # "You" (mic) or "Others" (system audio)
 
 class MeetingResponse(BaseModel):
     id: str
@@ -538,7 +539,8 @@ async def save_transcript(request: SaveTranscriptRequest):
                 # NEW: Recording-relative timestamps for audio-transcript synchronization
                 audio_start_time=transcript.audio_start_time,
                 audio_end_time=transcript.audio_end_time,
-                duration=transcript.duration
+                duration=transcript.duration,
+                speaker=transcript.speaker
             )
 
         logger.info("Transcripts saved successfully")

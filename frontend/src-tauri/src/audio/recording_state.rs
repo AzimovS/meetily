@@ -6,9 +6,10 @@ use anyhow::Result;
 
 use super::devices::AudioDevice;
 use super::buffer_pool::AudioBufferPool;
+use serde::{Serialize, Deserialize};
 
 /// Device type for audio chunks
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DeviceType {
     Microphone,
     System,
