@@ -88,6 +88,22 @@ export function About() {
                             </>
                         )}
                     </Button>
+                    <Button
+                        onClick={async () => {
+                            try {
+                                const report = await invoke<string>('debug_check_update');
+                                toast.info(report, { duration: 30000 });
+                                console.log(report);
+                            } catch (e: any) {
+                                toast.error('Debug failed: ' + (e.message || String(e)), { duration: 15000 });
+                            }
+                        }}
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs ml-2"
+                    >
+                        Debug Updater
+                    </Button>
                     {updateInfo?.available && (
                         <div className="mt-2 text-xs text-blue-600">
                             Update available: v{updateInfo.version}
