@@ -68,16 +68,32 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       has-apple-signing: ${{ steps.check.outputs.has-apple }}
+      has-windows-signing: ${{ steps.check.outputs.has-windows }}
     steps:
       - name: Check available signing secrets
         id: check
+        env:
+          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE }}
+          HAS_SM_HOST: ${{ secrets.SM_HOST }}
+          HAS_SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          HAS_SM_CERT: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+          HAS_SM_PASS: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          HAS_SM_HASH: ${{ secrets.SM_CODE_SIGNING_CERT_SHA1_HASH }}
         run: |
-          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ]; then
+          if [ -n "$HAS_APPLE" ]; then
             echo "has-apple=true" >> "$GITHUB_OUTPUT"
             echo "Apple signing secrets detected"
           else
             echo "has-apple=false" >> "$GITHUB_OUTPUT"
-            echo "No Apple signing secrets — builds will use ad-hoc signing"
+            echo "No Apple signing secrets — macOS builds will use ad-hoc signing"
+          fi
+
+          if [ -n "$HAS_SM_HOST" ] && [ -n "$HAS_SM_API_KEY" ] && [ -n "$HAS_SM_CERT" ] && [ -n "$HAS_SM_PASS" ] && [ -n "$HAS_SM_HASH" ]; then
+            echo "has-windows=true" >> "$GITHUB_OUTPUT"
+            echo "DigiCert signing secrets detected"
+          else
+            echo "has-windows=false" >> "$GITHUB_OUTPUT"
+            echo "No DigiCert signing secrets — Windows builds will be unsigned"
           fi
 
   # STEP 2: Build all platforms and upload directly to release
@@ -105,6 +121,7 @@ jobs:
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
       sign-binaries: ${{ needs.check-secrets.outputs.has-apple-signing == 'true' }}
+      sign-windows: ${{ needs.check-secrets.outputs.has-windows-signing == 'true' }}
       asset-prefix: "meetily"
       upload-artifacts: false  # tauri-action uploads directly to release
       release-id: ${{ needs.create-release.outputs.release-id }}
