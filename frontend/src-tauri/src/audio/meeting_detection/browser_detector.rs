@@ -46,10 +46,26 @@ pub fn check_browser_for_meeting(pid: i32) -> Option<BrowserMeetingInfo> {
     use cidre::{ax, cf};
 
     if !ax::is_process_trusted() {
+        tracing::warn!(
+            "Meeting detection: Accessibility permission not granted. \
+             Grant access in System Settings > Privacy & Security > Accessibility. \
+             Browser meeting detection (Google Meet) requires this permission."
+        );
+        // Prompt the user to grant permission
+        let _ = ax::is_process_trusted_with_prompt(true);
         return None;
     }
 
-    let app = ax::UiElement::with_app_pid(pid);
+    // The audio-producing process might be a helper (e.g., Chrome Helper).
+    // We need to find the main browser process PID to read window titles.
+    // Try the given PID first; if it has no windows, find the main app PID.
+    let main_pid = find_main_browser_pid(pid);
+    tracing::info!(
+        "Meeting detection: checking browser pid={} (main_pid={}) for meeting tabs",
+        pid, main_pid
+    );
+
+    let app = ax::UiElement::with_app_pid(main_pid);
 
     // Get AXWindows attribute — returns array of window elements
     let windows_val = match app.attr_value(ax::attr::windows()) {
@@ -81,8 +97,11 @@ pub fn check_browser_for_meeting(pid: i32) -> Option<BrowserMeetingInfo> {
         // If no match, the title is dropped here — never stored or logged.
         for pattern in MEETING_TITLE_PATTERNS {
             if title.contains(pattern) {
-                // Extract a clean meeting name from the title
                 let meeting_name = extract_meeting_name(&title, pattern);
+                tracing::info!(
+                    "Meeting detection: found meeting in browser — pattern='{}', name='{}'",
+                    pattern, meeting_name
+                );
                 return Some(BrowserMeetingInfo {
                     meeting_name: sanitize_meeting_name(&meeting_name),
                     pattern: pattern.to_string(),
@@ -91,6 +110,8 @@ pub fn check_browser_for_meeting(pid: i32) -> Option<BrowserMeetingInfo> {
         }
 
         // Title did not match any pattern — dropped immediately (privacy)
+        // Only log that we checked, not the actual title content
+        tracing::debug!("Meeting detection: browser window checked, no meeting pattern matched");
     }
 
     None
@@ -99,6 +120,65 @@ pub fn check_browser_for_meeting(pid: i32) -> Option<BrowserMeetingInfo> {
 #[cfg(not(target_os = "macos"))]
 pub fn check_browser_for_meeting(_pid: i32) -> Option<BrowserMeetingInfo> {
     None
+}
+
+/// Find the main browser process PID from a helper process PID.
+/// Chrome audio is typically produced by a helper/renderer process, but
+/// window titles are only accessible on the main app process.
+#[cfg(target_os = "macos")]
+fn find_main_browser_pid(helper_pid: i32) -> i32 {
+    use sysinfo::{Pid, System, ProcessesToUpdate};
+
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+
+    // Check if this PID has a known browser name — if so, it's already the main process
+    if let Some(proc) = sys.process(Pid::from_u32(helper_pid as u32)) {
+        let name = proc.name().to_string_lossy().to_string();
+        if name == "Google Chrome" || name == "Microsoft Edge" || name == "Brave Browser" || name == "Arc" {
+            return helper_pid;
+        }
+
+        // It's a helper — find the parent process or scan for the main browser
+        if let Some(parent_pid) = proc.parent() {
+            if let Some(parent) = sys.process(parent_pid) {
+                let parent_name = parent.name().to_string_lossy().to_string();
+                if parent_name == "Google Chrome" || parent_name == "Microsoft Edge"
+                    || parent_name == "Brave Browser" || parent_name == "Arc"
+                {
+                    tracing::info!(
+                        "Meeting detection: resolved helper pid={} to main browser pid={} ({})",
+                        helper_pid, parent_pid.as_u32(), parent_name
+                    );
+                    return parent_pid.as_u32() as i32;
+                }
+            }
+        }
+
+        // Walk up the process tree (Chrome helpers can be nested)
+        let mut current_pid = proc.parent();
+        for _ in 0..5 {
+            match current_pid {
+                Some(pid) => {
+                    if let Some(p) = sys.process(pid) {
+                        let pname = p.name().to_string_lossy().to_string();
+                        if pname == "Google Chrome" || pname == "Microsoft Edge"
+                            || pname == "Brave Browser" || pname == "Arc"
+                        {
+                            return pid.as_u32() as i32;
+                        }
+                        current_pid = p.parent();
+                    } else {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+    }
+
+    // Fallback: return the original PID
+    helper_pid
 }
 
 /// Extract a clean meeting name from a browser window title.

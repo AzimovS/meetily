@@ -349,12 +349,27 @@ fn start_audio_monitoring<R: Runtime>(
                 SystemAudioEvent::SystemAudioStarted(_app_names) => {
                     // Use detailed function for bundle IDs instead of display names
                     let detailed_apps = list_system_audio_apps_detailed();
+
+                    tracing::info!(
+                        "Meeting detection: audio apps detected: {:?}",
+                        detailed_apps.iter().map(|a| format!("{}({})", a.display_name, a.bundle_id)).collect::<Vec<_>>()
+                    );
+
                     let apps: Vec<super::AppInfo> = detailed_apps
                         .into_iter()
                         .map(|app| {
+                            // Use starts_with for browser matching — Chrome helper
+                            // processes have IDs like "com.google.Chrome.helper"
                             let is_browser = super::MACOS_BROWSER_BUNDLE_IDS
                                 .iter()
-                                .any(|bid| *bid == app.bundle_id);
+                                .any(|bid| app.bundle_id.starts_with(bid));
+
+                            if is_browser {
+                                tracing::info!(
+                                    "Meeting detection: identified browser: {} ({}), pid={}",
+                                    app.display_name, app.bundle_id, app.pid
+                                );
+                            }
 
                             super::AppInfo {
                                 identifier: app.bundle_id,
