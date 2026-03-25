@@ -105,7 +105,7 @@ ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Parakeet models
 thiserror = "2.0.16"                # Error handling for Parakeet
 
 # Async
-tokio = { version = "1.32.0", features = ["full", "tracing"] }
+tokio = { version = "1.32.0", features = ["full", "tracing", "test-util"] }
 tokio-util = "0.7"  # Utilities for tokio including CancellationToken
 async-trait = "0.1"  # Trait abstraction for async methods
 

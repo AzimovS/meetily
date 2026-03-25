@@ -171,18 +171,22 @@ impl MacOSSystemAudioDetector {
                                                     let cb = callback.clone();
                                                     std::thread::spawn(move || {
                                                         let apps = list_system_audio_using_apps();
-                                                        tracing::info!("detect_system_audio_listener: {:?}", apps);
+                                                        // Privacy: don't log app names in release builds
+                                                        #[cfg(debug_assertions)]
+                                                        tracing::debug!("detect_system_audio_listener: {:?}", apps);
 
                                                         if let Ok(guard) = cb.lock() {
                                                             let event = SystemAudioEvent::SystemAudioStarted(apps);
-                                                            tracing::info!(event = ?event, "detected");
+                                                            #[cfg(debug_assertions)]
+                                                            tracing::debug!(event = ?event, "detected");
                                                             (*guard)(event);
                                                         }
                                                     });
                                                 } else {
                                                     if let Ok(guard) = callback.lock() {
                                                         let event = SystemAudioEvent::SystemAudioStopped;
-                                                        tracing::info!(event = ?event, "detected");
+                                                        #[cfg(debug_assertions)]
+                                                        tracing::debug!(event = ?event, "detected");
                                                         (*guard)(event);
                                                     }
                                                 }
@@ -250,7 +254,8 @@ impl MacOSSystemAudioDetector {
                                                         let cb = data.0.clone();
                                                         std::thread::spawn(move || {
                                                             let apps = list_system_audio_using_apps();
-                                                            tracing::info!("detect_system_listener: {:?}", apps);
+                                                            #[cfg(debug_assertions)]
+                                                            tracing::debug!("detect_system_listener: {:?}", apps);
 
                                                             if let Ok(callback_guard) = cb.lock() {
                                                                 (*callback_guard)(SystemAudioEvent::SystemAudioStarted(apps));
@@ -355,7 +360,7 @@ impl MacOSSystemAudioDetector {
 }
 
 #[cfg(target_os = "macos")]
-fn list_system_audio_using_apps() -> Vec<String> {
+pub(crate) fn list_system_audio_using_apps() -> Vec<String> {
     match ca::System::processes() {
         Ok(processes) => {
             let mut apps = Vec::new();

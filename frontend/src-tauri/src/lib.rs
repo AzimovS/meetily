@@ -460,6 +460,7 @@ pub fn run() {
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
         )) as NotificationManagerState<tauri::Wry>)
         .manage(audio::init_system_audio_state())
+        .manage(audio::meeting_detection::commands::init_meeting_detection_state())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             log::info!("Application setup complete");
@@ -717,6 +718,12 @@ pub fn run() {
             audio::system_audio_commands::start_system_audio_monitoring,
             audio::system_audio_commands::stop_system_audio_monitoring,
             audio::system_audio_commands::get_system_audio_monitoring_status,
+            // Meeting detection commands
+            audio::meeting_detection::commands::enable_meeting_detection,
+            audio::meeting_detection::commands::disable_meeting_detection,
+            audio::meeting_detection::commands::get_meeting_detection_enabled,
+            audio::meeting_detection::commands::popup_start_recording,
+            audio::meeting_detection::commands::popup_dismiss,
             // Screen Recording permission commands
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,
