@@ -70,7 +70,14 @@ pub fn check_browser_for_meeting(pid: i32) -> Option<BrowserMeetingInfo> {
     // Get AXWindows attribute — returns array of window elements
     let windows_val = match app.attr_value(ax::attr::windows()) {
         Ok(val) => val,
-        Err(_) => return None,
+        Err(e) => {
+            tracing::warn!(
+                "Meeting detection: failed to get AXWindows for pid={}: {:?}. \
+                 This usually means Accessibility permission is not granted to this app.",
+                main_pid, e
+            );
+            return None;
+        }
     };
 
     // Safety: AXWindows returns a CFArray of AXUIElements
@@ -78,13 +85,18 @@ pub fn check_browser_for_meeting(pid: i32) -> Option<BrowserMeetingInfo> {
         std::mem::transmute(windows_val.as_ref())
     };
 
+    tracing::info!("Meeting detection: browser has {} windows", windows.len());
+
     for i in 0..windows.len() {
         let window = &windows[i];
 
         // Read window title (reflects active tab in Chrome/Edge)
         let title_val = match window.attr_value(ax::attr::title()) {
             Ok(val) => val,
-            Err(_) => continue,
+            Err(e) => {
+                tracing::debug!("Meeting detection: failed to read title for window {}: {:?}", i, e);
+                continue;
+            }
         };
 
         // Safety: AXTitle returns a CFString
