@@ -327,7 +327,7 @@ PRIORITIZE: proposals ("I think we should..."), dates/deadlines/numbers, disagre
 - Write concise paragraphs for topic summaries; use structured lists only for action items and decisions.
 - Do not start sentences with "The team discussed..." — vary sentence structure.
 - Do not use filler phrases: "It is worth noting", "In summary", "Overall", "In conclusion".
-- Attribute key statements to speakers when speaker labels (e.g., [Speaker Name]) are present in the transcript. When no speaker labels exist, summarize without attribution rather than guessing.
+- The transcript may contain generic speaker labels like [You] (the local user's microphone) and [Others] (remote participants). Do NOT use these labels as names. Instead, try to infer actual names from the conversation context (e.g., if someone says "Thanks, Sarah" or "John, can you handle that?"). If no real names can be determined, simply describe what was said without attribution rather than writing "Unnamed participant" or similar placeholders.
 - Correct obvious transcription errors (homophones, technical terms) silently.
 - Distinguish decisions (finalized) from discussions (still open).
 - Use direct quotes sparingly — only when exact wording matters.
