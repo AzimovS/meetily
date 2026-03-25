@@ -56,6 +56,10 @@ pub struct MeetingDetectionActor {
     previous_apps: HashSet<String>,
     /// Apps to ignore (bundle IDs on macOS)
     ignore_list: HashSet<String>,
+    /// Display names for apps (identifier → display name)
+    app_display_names: HashMap<String, String>,
+    /// Meeting names extracted from browser titles (identifier → meeting name)
+    browser_meeting_names: HashMap<String, String>,
     /// Settings
     settings: DetectionSettings,
     /// Whether a manual recording is active (suppresses detection)
@@ -92,6 +96,8 @@ pub fn spawn_actor(
         app_states: HashMap::new(),
         previous_apps: HashSet::new(),
         ignore_list,
+        app_display_names: HashMap::new(),
+        browser_meeting_names: HashMap::new(),
         settings,
         manual_recording_active: false,
         active_timer: None,
@@ -180,6 +186,12 @@ impl MeetingDetectionActor {
 
     /// Core detection logic: diff current apps against previous snapshot.
     async fn handle_apps_update(&mut self, current_apps: Vec<AppInfo>) {
+        // Update display name cache
+        for app in &current_apps {
+            self.app_display_names
+                .insert(app.identifier.clone(), app.display_name.clone());
+        }
+
         // Build current set of identifiers
         let current_ids: HashSet<String> = current_apps
             .iter()
@@ -219,16 +231,31 @@ impl MeetingDetectionActor {
             if self.ignore_list.contains(&app.identifier) {
                 continue;
             }
-            // Skip browsers without meeting titles (handled separately in Phase 2)
-            if app.is_browser {
-                // For now, skip browsers entirely. Phase 2 adds title checking.
-                continue;
-            }
             if currently_recording_app.is_some() {
                 // Already recording — don't show another popup
                 continue;
             }
-            self.on_app_audio_started(app);
+            // For browsers, check window titles to distinguish meetings from media
+            if app.is_browser {
+                if let Some(pid) = app.pid {
+                    match super::browser_detector::check_browser_for_meeting(pid) {
+                        Some(meeting_info) => {
+                            // Browser has an active meeting — store meeting name for popup
+                            self.browser_meeting_names
+                                .insert(app.identifier.clone(), meeting_info.meeting_name);
+                            self.on_app_audio_started(app);
+                        }
+                        None => {
+                            // Browser audio but no meeting title — skip (YouTube, Spotify, etc.)
+                            continue;
+                        }
+                    }
+                } else {
+                    continue; // No PID, can't check titles
+                }
+            } else {
+                self.on_app_audio_started(app);
+            }
         }
 
         // Handle stopped apps
@@ -383,12 +410,12 @@ impl MeetingDetectionActor {
         );
         self.cancel_timer();
 
-        // Determine meeting name from app display name
+        // Use browser meeting name if available, otherwise display name
         let meeting_name = self
-            .previous_apps
-            .iter()
-            .find(|id| id.as_str() == app_id)
+            .browser_meeting_names
+            .get(app_id)
             .cloned()
+            .or_else(|| self.app_display_names.get(app_id).cloned())
             .unwrap_or_else(|| app_id.to_string());
 
         let _ = self
@@ -451,7 +478,12 @@ impl MeetingDetectionActor {
                     // Set popup timeout (60 seconds)
                     self.set_timer(TimerKind::PopupTimeout, Duration::from_secs(60), gen);
 
-                    let display_name = app_id.clone(); // TODO: resolve to display name
+                    let display_name = self
+                        .app_display_names
+                        .get(&app_id)
+                        .cloned()
+                        .unwrap_or_else(|| app_id.clone());
+                    let meeting_title = self.browser_meeting_names.get(&app_id).cloned();
 
                     tracing::info!("Threshold elapsed for {} — showing popup", display_name);
 
@@ -460,7 +492,7 @@ impl MeetingDetectionActor {
                         .send(SideEffect::ShowPopup {
                             app_name: display_name,
                             app_identifier: app_id,
-                            meeting_title: None,
+                            meeting_title,
                             generation: gen,
                         })
                         .await;
@@ -558,6 +590,7 @@ mod tests {
             identifier: id.to_string(),
             display_name: name.to_string(),
             is_browser: false,
+            pid: None,
         }
     }
 

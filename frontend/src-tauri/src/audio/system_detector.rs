@@ -383,6 +383,47 @@ pub(crate) fn list_system_audio_using_apps() -> Vec<String> {
     }
 }
 
+/// Extended app info with bundle ID, display name, and PID
+#[derive(Debug, Clone)]
+pub struct AudioAppInfo {
+    pub bundle_id: String,
+    pub display_name: String,
+    pub pid: i32,
+}
+
+/// List apps using system audio with bundle IDs (for meeting detection)
+#[cfg(target_os = "macos")]
+pub(crate) fn list_system_audio_apps_detailed() -> Vec<AudioAppInfo> {
+    match ca::System::processes() {
+        Ok(processes) => {
+            let mut apps = Vec::new();
+            for process in processes {
+                if process.is_running_output().unwrap_or(false) {
+                    if let Ok(pid) = process.pid() {
+                        if let Some(running_app) = cidre::ns::RunningApp::with_pid(pid) {
+                            let display_name = running_app
+                                .localized_name()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| format!("Process {}", pid));
+                            let bundle_id = running_app
+                                .bundle_id()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| format!("pid.{}", pid));
+                            apps.push(AudioAppInfo {
+                                bundle_id,
+                                display_name,
+                                pid,
+                            });
+                        }
+                    }
+                }
+            }
+            apps
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
 // Stub implementation for non-macOS platforms
 #[cfg(not(target_os = "macos"))]
 pub struct MacOSSystemAudioDetector;

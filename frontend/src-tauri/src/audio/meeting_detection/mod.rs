@@ -6,6 +6,7 @@
 
 pub mod coordinator;
 pub mod commands;
+pub mod browser_detector;
 
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -15,7 +16,7 @@ use std::time::Instant;
 // ============================================================================
 
 /// Information about an app using audio, with both identifiers
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct AppInfo {
     /// Bundle ID on macOS (e.g., "us.zoom.xos"), process name on Windows
     pub identifier: String,
@@ -23,6 +24,8 @@ pub struct AppInfo {
     pub display_name: String,
     /// Whether this is a known browser (triggers title checking)
     pub is_browser: bool,
+    /// Process ID (used for accessibility API queries on macOS)
+    pub pid: Option<i32>,
 }
 
 // ============================================================================

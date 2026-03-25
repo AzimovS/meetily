@@ -328,6 +328,7 @@ pub async fn popup_dismiss(
 // ============================================================================
 
 /// Starts CoreAudio monitoring and feeds events to the detection actor.
+/// Uses the detailed app list (with bundle IDs) for proper identification.
 fn start_audio_monitoring<R: Runtime>(
     _app: AppHandle<R>,
     handle: MeetingDetectionHandle,
@@ -337,6 +338,7 @@ fn start_audio_monitoring<R: Runtime>(
     {
         use crate::audio::system_detector::{
             new_system_audio_callback, SystemAudioDetector, SystemAudioEvent,
+            list_system_audio_apps_detailed,
         };
 
         let handle_clone = handle.clone();
@@ -344,23 +346,24 @@ fn start_audio_monitoring<R: Runtime>(
         // Create callback that sends events to the actor
         let callback = new_system_audio_callback(move |event| {
             match event {
-                SystemAudioEvent::SystemAudioStarted(app_names) => {
-                    // Convert display names to AppInfo
-                    // TODO: Use bundle IDs when available (requires system_detector enhancement)
-                    let apps: Vec<super::AppInfo> = app_names
+                SystemAudioEvent::SystemAudioStarted(_app_names) => {
+                    // Use detailed function for bundle IDs instead of display names
+                    let detailed_apps = list_system_audio_apps_detailed();
+                    let apps: Vec<super::AppInfo> = detailed_apps
                         .into_iter()
-                        .map(|name| {
-                            #[cfg(target_os = "macos")]
+                        .map(|app| {
                             let is_browser = super::MACOS_BROWSER_BUNDLE_IDS
                                 .iter()
-                                .any(|bid| name.contains(bid));
-                            #[cfg(not(target_os = "macos"))]
-                            let is_browser = false;
+                                .any(|bid| *bid == app.bundle_id);
 
                             super::AppInfo {
-                                identifier: name.clone(),
-                                display_name: name,
+                                identifier: app.bundle_id,
+                                display_name: app.display_name,
                                 is_browser,
+                                #[cfg(target_os = "macos")]
+                                pid: Some(app.pid),
+                                #[cfg(not(target_os = "macos"))]
+                                pid: None,
                             }
                         })
                         .collect();
