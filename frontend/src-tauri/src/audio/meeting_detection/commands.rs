@@ -338,24 +338,22 @@ fn start_audio_monitoring<R: Runtime>(
     {
         use crate::audio::system_detector::{
             new_system_audio_callback, SystemAudioDetector, SystemAudioEvent,
-            list_system_audio_apps_detailed,
         };
 
         let handle_clone = handle.clone();
 
-        // Create callback that sends events to the actor
+        // Create callback that sends events to the actor.
+        // AudioAppInfo now comes directly from the event (resolved in the
+        // same thread that queries CoreAudio, avoiding empty re-query issues).
         let callback = new_system_audio_callback(move |event| {
             match event {
-                SystemAudioEvent::SystemAudioStarted(_app_names) => {
-                    // Use detailed function for bundle IDs instead of display names
-                    let detailed_apps = list_system_audio_apps_detailed();
-
+                SystemAudioEvent::SystemAudioStarted(audio_apps) => {
                     tracing::info!(
                         "Meeting detection: audio apps detected: {:?}",
-                        detailed_apps.iter().map(|a| format!("{}({})", a.display_name, a.bundle_id)).collect::<Vec<_>>()
+                        audio_apps.iter().map(|a| format!("{}({})", a.display_name, a.bundle_id)).collect::<Vec<_>>()
                     );
 
-                    let apps: Vec<super::AppInfo> = detailed_apps
+                    let apps: Vec<super::AppInfo> = audio_apps
                         .into_iter()
                         .map(|app| {
                             // Use starts_with for browser matching — Chrome helper
@@ -375,10 +373,7 @@ fn start_audio_monitoring<R: Runtime>(
                                 identifier: app.bundle_id,
                                 display_name: app.display_name,
                                 is_browser,
-                                #[cfg(target_os = "macos")]
                                 pid: Some(app.pid),
-                                #[cfg(not(target_os = "macos"))]
-                                pid: None,
                             }
                         })
                         .collect();

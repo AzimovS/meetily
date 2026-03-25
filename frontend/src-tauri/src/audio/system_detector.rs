@@ -4,10 +4,19 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
 use cidre::{core_audio as ca, os};
 
+/// Extended app info with bundle ID, display name, and PID
+#[derive(Debug, Clone)]
+pub struct AudioAppInfo {
+    pub bundle_id: String,
+    pub display_name: String,
+    pub pid: i32,
+}
+
 /// Event types for system audio detection
 #[derive(Debug, Clone)]
 pub enum SystemAudioEvent {
-    SystemAudioStarted(Vec<String>), // List of apps using system audio
+    /// System audio started — carries detailed app info (bundle IDs, PIDs)
+    SystemAudioStarted(Vec<AudioAppInfo>),
     SystemAudioStopped,
 }
 
@@ -360,40 +369,7 @@ impl MacOSSystemAudioDetector {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn list_system_audio_using_apps() -> Vec<String> {
-    match ca::System::processes() {
-        Ok(processes) => {
-            let mut apps = Vec::new();
-            for process in processes {
-                if process.is_running_output().unwrap_or(false) {
-                    if let Ok(pid) = process.pid() {
-                        if let Some(running_app) = cidre::ns::RunningApp::with_pid(pid) {
-                            let name = running_app
-                                .localized_name()
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| format!("Process {}", pid));
-                            apps.push(name);
-                        }
-                    }
-                }
-            }
-            apps
-        }
-        Err(_) => Vec::new(),
-    }
-}
-
-/// Extended app info with bundle ID, display name, and PID
-#[derive(Debug, Clone)]
-pub struct AudioAppInfo {
-    pub bundle_id: String,
-    pub display_name: String,
-    pub pid: i32,
-}
-
-/// List apps using system audio with bundle IDs (for meeting detection)
-#[cfg(target_os = "macos")]
-pub(crate) fn list_system_audio_apps_detailed() -> Vec<AudioAppInfo> {
+pub(crate) fn list_system_audio_using_apps() -> Vec<AudioAppInfo> {
     match ca::System::processes() {
         Ok(processes) => {
             let mut apps = Vec::new();
