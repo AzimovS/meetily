@@ -470,6 +470,24 @@ pub fn run() {
                 log::error!("Failed to create system tray: {}", e);
             }
 
+            // Auto-start meeting detection if enabled in settings
+            {
+                let app_for_detection = _app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let settings = audio::meeting_detection::commands::load_settings(&app_for_detection).await;
+                    if settings.enabled {
+                        log::info!("Meeting detection enabled in settings — auto-starting");
+                        let state = app_for_detection.state::<audio::meeting_detection::commands::MeetingDetectionManagedState>();
+                        if let Err(e) = audio::meeting_detection::commands::enable_meeting_detection(
+                            app_for_detection.clone(),
+                            state,
+                        ).await {
+                            log::error!("Failed to auto-start meeting detection: {}", e);
+                        }
+                    }
+                });
+            }
+
             // Initialize notification system with proper defaults
             log::info!("Initializing notification system...");
             let app_for_notif = _app.handle().clone();

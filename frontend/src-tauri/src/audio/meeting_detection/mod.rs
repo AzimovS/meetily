@@ -126,7 +126,7 @@ pub struct DetectionSettings {
 impl Default for DetectionSettings {
     fn default() -> Self {
         Self {
-            enabled: false, // Disabled by default — user must opt in
+            enabled: true, // Enabled by default
             threshold_seconds: 15,
             cooldown_minutes: 10,
             grace_period_seconds: 30,
