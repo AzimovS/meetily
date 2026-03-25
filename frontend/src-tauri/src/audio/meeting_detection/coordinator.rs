@@ -235,27 +235,32 @@ impl MeetingDetectionActor {
                 // Already recording — don't show another popup
                 continue;
             }
-            // For browsers, check window titles to distinguish meetings from media
+            // For browsers, try to check window titles to get the meeting name.
+            // If accessibility isn't available, fall back to treating it as a regular app
+            // (user sees "Google Chrome" instead of "Weekly Standup", but still gets notified).
             if app.is_browser {
                 if let Some(pid) = app.pid {
-                    match super::browser_detector::check_browser_for_meeting(pid) {
-                        Some(meeting_info) => {
-                            // Browser has an active meeting — store meeting name for popup
-                            self.browser_meeting_names
-                                .insert(app.identifier.clone(), meeting_info.meeting_name);
-                            self.on_app_audio_started(app);
+                    if super::browser_detector::check_accessibility_permission(false) {
+                        match super::browser_detector::check_browser_for_meeting(pid) {
+                            Some(meeting_info) => {
+                                self.browser_meeting_names
+                                    .insert(app.identifier.clone(), meeting_info.meeting_name);
+                            }
+                            None => {
+                                // Browser audio but no meeting title — skip (YouTube, Spotify, etc.)
+                                continue;
+                            }
                         }
-                        None => {
-                            // Browser audio but no meeting title — skip (YouTube, Spotify, etc.)
-                            continue;
-                        }
+                    } else {
+                        tracing::info!(
+                            "Meeting detection: accessibility not available, treating browser {} as regular app",
+                            app.display_name
+                        );
+                        // Fall through — show popup with app name instead of meeting title
                     }
-                } else {
-                    continue; // No PID, can't check titles
                 }
-            } else {
-                self.on_app_audio_started(app);
             }
+            self.on_app_audio_started(app);
         }
 
         // Handle stopped apps
