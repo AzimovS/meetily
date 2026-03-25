@@ -75,7 +75,7 @@ impl Template {
         let mut markdown = String::from("# <Add Title here>\n\n");
 
         for section in &self.sections {
-            markdown.push_str(&format!("**{}**\n\n", section.title));
+            markdown.push_str(&format!("## {}\n\n", section.title));
         }
 
         markdown

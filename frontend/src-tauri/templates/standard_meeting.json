@@ -1,27 +1,31 @@
 {
   "name": "Standard Meeting Notes",
-  "description": "A standard template for general meetings, focusing on key outcomes and actions.",
+  "description": "A general-purpose template for any meeting. Produces concise, scannable notes with clear decisions and action items.",
   "sections": [
     {
       "title": "Summary",
-      "instruction": "Provide a brief, one-paragraph executive summary of the entire meeting.",
+      "instruction": "Write 2-3 sentences capturing the meeting's purpose and most important outcome. Lead with what was decided or accomplished, not what was discussed. If the meeting had no clear outcome, state the primary topics covered. Do not begin with 'The meeting was held to discuss...'",
       "format": "paragraph"
     },
     {
-      "title": "Key Decisions",
-      "instruction": "List the most important decisions made during the meeting.",
+      "title": "Key Topics",
+      "instruction": "Identify the 3-5 major topics discussed. For each, write 2-4 sentences in natural prose: what was said, what was decided, and what remains unresolved. Attribute key statements to speakers when labels are available. Use clear topic sentences. Do not use bullet points — write flowing paragraphs under each topic heading.",
+      "format": "paragraph"
+    },
+    {
+      "title": "Decisions",
+      "instruction": "List only finalized decisions where the group reached agreement. Format each as: the decision, followed by brief rationale if stated. Do not include suggestions, proposals still under debate, or hypotheticals. If no decisions were made, omit this section entirely.",
       "format": "list"
     },
     {
       "title": "Action Items",
-      "instruction": "List all assigned tasks with their owners and due date. Always add reference transcript segment and timestamp in the table.",
-      "format": "list",
-      "item_format": "| **Owner** | Task | Due | Reference Transcript Segment | Segment Time stamp |\n| --- | --- | --- | --- | --- |"
+      "instruction": "List concrete commitments where someone explicitly agreed to do something as bullet points. Format each as: '- **Owner** to task description (deadline if mentioned)'. Only include items with a clear owner. If ownership is ambiguous, note it. Do not include wishes, suggestions, or hypotheticals. Do not use a table.",
+      "format": "list"
     },
     {
-      "title": "Discussion Highlights",
-      "instruction": "Summarize the main topics of discussion, key arguments, and important insights.",
-      "format": "paragraph"
+      "title": "Open Questions",
+      "instruction": "List unresolved questions or topics that need follow-up. Only include items that were explicitly left open or deferred. If everything was resolved, omit this section entirely.",
+      "format": "list"
     }
   ]
 }
