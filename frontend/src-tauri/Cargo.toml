@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.1.13"
+version = "0.1.14"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -105,7 +105,7 @@ ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Parakeet models
 thiserror = "2.0.16"                # Error handling for Parakeet
 
 # Async
-tokio = { version = "1.32.0", features = ["full", "tracing"] }
+tokio = { version = "1.32.0", features = ["full", "tracing", "test-util"] }
 tokio-util = "0.7"  # Utilities for tokio including CancellationToken
 async-trait = "0.1"  # Trait abstraction for async methods
 
@@ -162,7 +162,7 @@ anyhow = "1.0"
 time = { version = "0.3", features = ["formatting"] }
 reqwest = { version = "0.11", features = ["multipart", "json"] }
 core-graphics = "0.23"
-cidre = { git = "https://github.com/yury/cidre", rev = "a9587fa", features = ["av"] }
+cidre = { git = "https://github.com/yury/cidre", rev = "a9587fa", features = ["av", "ax"] }
 dasp = "0.11.0"
 futures-channel = "0.3.31"
 

@@ -53,8 +53,9 @@ pub async fn start_system_audio_monitoring(
     let callback = new_system_audio_callback(move |event| {
         match event {
             SystemAudioEvent::SystemAudioStarted(apps) => {
-                tracing::info!("System audio started by apps: {:?}", apps);
-                let _ = app_handle.emit("system-audio-started", apps);
+                let display_names: Vec<String> = apps.iter().map(|a| a.display_name.clone()).collect();
+                tracing::info!("System audio started by apps: {:?}", display_names);
+                let _ = app_handle.emit("system-audio-started", display_names);
             }
             SystemAudioEvent::SystemAudioStopped => {
                 let _ = app_handle.emit("system-audio-stopped", ());
