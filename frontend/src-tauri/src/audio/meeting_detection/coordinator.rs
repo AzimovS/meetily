@@ -172,8 +172,8 @@ impl MeetingDetectionActor {
             }
             DetectionEvent::ManualRecordingStarted => {
                 self.manual_recording_active = true;
-                // Dismiss any active popup
-                let _ = self.effect_sender.send(SideEffect::DismissPopup).await;
+                // Clear any detected meeting from tray
+                let _ = self.effect_sender.send(SideEffect::MeetingDetectionCleared).await;
             }
             DetectionEvent::ManualRecordingStopped => {
                 self.manual_recording_active = false;
@@ -235,29 +235,18 @@ impl MeetingDetectionActor {
                 // Already recording — don't show another popup
                 continue;
             }
-            // For browsers, try to check window titles to get the meeting name.
-            // If accessibility isn't available, fall back to treating it as a regular app
-            // (user sees "Google Chrome" instead of "Weekly Standup", but still gets notified).
+            // If the app is a browser using the mic, it's almost certainly a meeting
+            // (YouTube/Spotify don't use the mic). Optionally enrich with meeting name
+            // from window title if accessibility is available.
             if app.is_browser {
                 if let Some(pid) = app.pid {
                     if super::browser_detector::check_accessibility_permission(false) {
-                        match super::browser_detector::check_browser_for_meeting(pid) {
-                            Some(meeting_info) => {
-                                self.browser_meeting_names
-                                    .insert(app.identifier.clone(), meeting_info.meeting_name);
-                            }
-                            None => {
-                                // Browser audio but no meeting title — skip (YouTube, Spotify, etc.)
-                                continue;
-                            }
+                        if let Some(meeting_info) = super::browser_detector::check_browser_for_meeting(pid) {
+                            self.browser_meeting_names
+                                .insert(app.identifier.clone(), meeting_info.meeting_name);
                         }
-                    } else {
-                        tracing::info!(
-                            "Meeting detection: accessibility not available, treating browser {} as regular app",
-                            app.display_name
-                        );
-                        // Fall through — show popup with app name instead of meeting title
                     }
+                    // Proceed regardless — mic usage by a browser IS the meeting signal
                 }
             }
             self.on_app_audio_started(app);
@@ -481,7 +470,8 @@ impl MeetingDetectionActor {
                     );
 
                     // Set popup timeout (60 seconds)
-                    self.set_timer(TimerKind::PopupTimeout, Duration::from_secs(60), gen);
+                    // Auto-dismiss popup after 5 seconds if user doesn't interact
+                    self.set_timer(TimerKind::PopupTimeout, Duration::from_secs(5), gen);
 
                     let display_name = self
                         .app_display_names
@@ -490,31 +480,30 @@ impl MeetingDetectionActor {
                         .unwrap_or_else(|| app_id.clone());
                     let meeting_title = self.browser_meeting_names.get(&app_id).cloned();
 
-                    tracing::info!("Threshold elapsed for {} — showing popup", display_name);
+                    tracing::info!("Threshold elapsed for {} — notifying via tray", display_name);
 
                     let _ = self
                         .effect_sender
-                        .send(SideEffect::ShowPopup {
+                        .send(SideEffect::MeetingDetected {
                             app_name: display_name,
                             app_identifier: app_id,
                             meeting_title,
-                            generation: gen,
                         })
                         .await;
                 }
             }
             TimerKind::PopupTimeout => {
-                // Popup timed out — treat as dismiss
-                let popup_app = self
+                // Notification timed out — clear tray item, start cooldown
+                let notif_app = self
                     .app_states
                     .iter()
                     .find(|(_, state)| matches!(state, DetectionState::PopupShown { .. }))
                     .map(|(id, _)| id.clone());
 
-                if let Some(app_id) = popup_app {
-                    tracing::info!("Popup timed out for {}", app_id);
+                if let Some(app_id) = notif_app {
+                    tracing::info!("Meeting notification timed out for {}", app_id);
                     self.handle_popup_dismissed(&app_id);
-                    let _ = self.effect_sender.send(SideEffect::DismissPopup).await;
+                    let _ = self.effect_sender.send(SideEffect::MeetingDetectionCleared).await;
                 }
             }
             TimerKind::GracePeriod => {

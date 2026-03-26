@@ -1,15 +1,17 @@
 // audio/meeting_detection/commands.rs
 //
 // Tauri commands for meeting detection + settings persistence.
+// Uses tray menu + native notification (no popup windows).
 
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_store::StoreExt;
 
 use super::coordinator::{MeetingDetectionHandle, spawn_actor};
-use super::{DetectionEvent, DetectionSettings, SideEffect};
+use super::{DetectedMeeting, DetectionEvent, DetectionSettings, SideEffect};
 
 // ============================================================================
 // MANAGED STATE
@@ -19,6 +21,8 @@ pub struct MeetingDetectionState {
     pub handle: Option<MeetingDetectionHandle>,
     pub shutdown: Option<tokio_util::sync::CancellationToken>,
     pub settings: DetectionSettings,
+    /// Currently detected meeting (shown in tray menu)
+    pub detected_meeting: Option<DetectedMeeting>,
 }
 
 impl Default for MeetingDetectionState {
@@ -27,6 +31,7 @@ impl Default for MeetingDetectionState {
             handle: None,
             shutdown: None,
             settings: DetectionSettings::default(),
+            detected_meeting: None,
         }
     }
 }
@@ -46,15 +51,12 @@ const SETTINGS_KEY: &str = "detection_settings";
 
 pub async fn load_settings<R: Runtime>(app: &AppHandle<R>) -> DetectionSettings {
     match app.store(STORE_FILE) {
-        Ok(store) => {
-            match store.get(SETTINGS_KEY) {
-                Some(value) => {
-                    serde_json::from_value::<DetectionSettings>(value.clone())
-                        .unwrap_or_default()
-                }
-                None => DetectionSettings::default(),
+        Ok(store) => match store.get(SETTINGS_KEY) {
+            Some(value) => {
+                serde_json::from_value::<DetectionSettings>(value.clone()).unwrap_or_default()
             }
-        }
+            None => DetectionSettings::default(),
+        },
         Err(_) => DetectionSettings::default(),
     }
 }
@@ -75,7 +77,7 @@ pub async fn save_settings<R: Runtime>(
 // ============================================================================
 
 /// Process side effects from the detection actor.
-/// Runs as a background task, creating popup windows and starting/stopping recording.
+/// Updates tray menu and shows native notifications.
 pub fn spawn_effect_handler<R: Runtime>(
     app: AppHandle<R>,
     mut effect_rx: mpsc::Receiver<SideEffect>,
@@ -98,36 +100,89 @@ pub fn spawn_effect_handler<R: Runtime>(
 
 async fn handle_effect<R: Runtime>(app: &AppHandle<R>, effect: SideEffect) {
     match effect {
-        SideEffect::ShowPopup {
+        SideEffect::MeetingDetected {
             app_name,
             app_identifier,
             meeting_title,
-            generation,
         } => {
-            show_meeting_popup(app, &app_name, &app_identifier, meeting_title.as_deref(), generation);
+            let display_name = meeting_title
+                .as_deref()
+                .unwrap_or(&app_name);
+
+            tracing::info!("Meeting detected: {} — updating tray", display_name);
+
+            // Store detected meeting in shared state
+            {
+                let state = app.state::<MeetingDetectionManagedState>();
+                let mut guard = state.lock().await;
+                guard.detected_meeting = Some(DetectedMeeting {
+                    app_name: app_name.clone(),
+                    app_identifier,
+                    meeting_title: meeting_title.clone(),
+                });
+            }
+
+            // Update tray menu to show "Start Recording (app)"
+            crate::tray::update_tray_menu(app);
+
+            // Show native notification (sound + banner, no action buttons needed)
+            let body = format!("{} — click tray to start recording", display_name);
+            if let Err(e) = app
+                .notification()
+                .builder()
+                .title("Meeting Detected")
+                .body(&body)
+                .show()
+            {
+                tracing::warn!("Failed to show meeting notification: {}", e);
+            }
         }
-        SideEffect::DismissPopup => {
-            dismiss_meeting_popup(app);
+        SideEffect::MeetingDetectionCleared => {
+            tracing::info!("Meeting detection cleared — reverting tray");
+
+            // Clear detected meeting
+            {
+                let state = app.state::<MeetingDetectionManagedState>();
+                let mut guard = state.lock().await;
+                guard.detected_meeting = None;
+            }
+
+            // Revert tray menu
+            crate::tray::update_tray_menu(app);
         }
         SideEffect::StartRecording { meeting_name } => {
             tracing::info!("Auto-detection starting recording: {}", meeting_name);
-            // Call the shared internal recording function
-            match super::super::recording_commands::start_recording_with_meeting_name(
-                app.clone(),
-                Some(meeting_name),
-            )
-            .await
+
+            // Clear detected meeting from tray
             {
-                Ok(()) => {
-                    // Emit event for frontend sync
-                    let _ = app.emit("recording-started-by-detection", serde_json::json!({
-                        "source": "meeting-detection"
-                    }));
-                }
-                Err(e) => {
-                    tracing::error!("Failed to start recording from detection: {}", e);
-                }
+                let state = app.state::<MeetingDetectionManagedState>();
+                let mut guard = state.lock().await;
+                guard.detected_meeting = None;
             }
+
+            let app_clone = app.clone();
+            tokio::spawn(async move {
+                match super::super::recording_commands::start_recording_with_meeting_name(
+                    app_clone.clone(),
+                    Some(meeting_name),
+                )
+                .await
+                {
+                    Ok(()) => {
+                        let _ = app_clone.emit(
+                            "recording-started-by-detection",
+                            serde_json::json!({"source": "meeting-detection"}),
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to start recording from detection: {}", e);
+                        let _ = app_clone.emit(
+                            "recording-error",
+                            serde_json::json!({"error": e.to_string(), "source": "meeting-detection"}),
+                        );
+                    }
+                }
+            });
         }
         SideEffect::StopRecording => {
             tracing::info!("Auto-detection stopping recording");
@@ -135,87 +190,13 @@ async fn handle_effect<R: Runtime>(app: &AppHandle<R>, effect: SideEffect) {
                 save_path: String::new(),
             };
             match super::super::recording_commands::stop_recording(app.clone(), args).await {
-                Ok(()) => {
-                    tracing::info!("Auto-stop recording completed");
-                }
-                Err(e) => {
-                    tracing::error!("Failed to auto-stop recording: {}", e);
-                }
+                Ok(()) => tracing::info!("Auto-stop recording completed"),
+                Err(e) => tracing::error!("Failed to auto-stop recording: {}", e),
             }
         }
         SideEffect::ShowGraceNotification { seconds_remaining } => {
-            // Use basic notification for grace period warning
-            tracing::info!(
-                "Grace period: recording stops in {}s",
-                seconds_remaining
-            );
-            // TODO: Show notification via tauri-plugin-notification (no action needed)
+            tracing::info!("Grace period: recording stops in {}s", seconds_remaining);
         }
-    }
-}
-
-// ============================================================================
-// POPUP WINDOW MANAGEMENT
-// ============================================================================
-
-fn show_meeting_popup<R: Runtime>(
-    app: &AppHandle<R>,
-    app_name: &str,
-    app_identifier: &str,
-    meeting_title: Option<&str>,
-    generation: u64,
-) {
-    // Close existing popup if any
-    dismiss_meeting_popup(app);
-
-    // Create the popup window
-    match tauri::WebviewWindowBuilder::new(
-        app,
-        "meeting-popup",
-        tauri::WebviewUrl::App("/popup/meeting-detected".into()),
-    )
-    .title("Meeting Detected")
-    .inner_size(380.0, 180.0)
-    .decorations(false)
-    .always_on_top(true)
-    .resizable(false)
-    .skip_taskbar(true)
-    .focused(false) // CRITICAL: don't steal focus from meeting
-    .center()
-    .build()
-    {
-        Ok(_window) => {
-            // Send data to the popup after a short delay to ensure it's loaded
-            let app_clone = app.clone();
-            let app_name_owned = app_name.to_string();
-            let app_identifier_owned = app_identifier.to_string();
-            let meeting_title_owned = meeting_title.map(|s| s.to_string());
-
-            tracing::info!("Meeting popup shown for: {}", app_name_owned);
-
-            tokio::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                let _ = app_clone.emit_to(
-                    "meeting-popup",
-                    "meeting-detected-data",
-                    serde_json::json!({
-                        "appName": app_name_owned,
-                        "appIdentifier": app_identifier_owned,
-                        "meetingTitle": meeting_title_owned,
-                        "generation": generation,
-                    }),
-                );
-            });
-        }
-        Err(e) => {
-            tracing::error!("Failed to create meeting popup window: {}", e);
-        }
-    }
-}
-
-fn dismiss_meeting_popup<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("meeting-popup") {
-        let _ = window.close();
     }
 }
 
@@ -231,25 +212,19 @@ pub async fn enable_meeting_detection<R: Runtime>(
     let mut guard = state.lock().await;
 
     if guard.handle.is_some() {
-        return Ok(()); // Already running
+        return Ok(());
     }
 
-    // Load settings
     let settings = load_settings(&app).await;
     guard.settings = settings.clone();
     guard.settings.enabled = true;
 
-    // Save enabled state
     save_settings(&app, &guard.settings).await?;
 
-    // Spawn actor
     let (effect_tx, effect_rx) = mpsc::channel(32);
     let (handle, shutdown) = spawn_actor(guard.settings.clone(), effect_tx);
 
-    // Spawn effect handler
     spawn_effect_handler(app.clone(), effect_rx, shutdown.clone());
-
-    // Start system audio monitoring to feed events to the actor
     start_audio_monitoring(app.clone(), handle.clone(), shutdown.clone());
 
     guard.handle = Some(handle);
@@ -270,12 +245,12 @@ pub async fn disable_meeting_detection<R: Runtime>(
         shutdown.cancel();
     }
     guard.handle = None;
+    guard.detected_meeting = None;
 
     guard.settings.enabled = false;
     save_settings(&app, &guard.settings).await?;
 
-    // Dismiss any open popup
-    dismiss_meeting_popup(&app);
+    crate::tray::update_tray_menu(&app);
 
     tracing::info!("Meeting detection disabled");
     Ok(())
@@ -289,118 +264,71 @@ pub async fn get_meeting_detection_enabled(
     Ok(guard.handle.is_some())
 }
 
-/// Called by the popup window when user clicks "Start Recording"
-#[tauri::command]
-pub async fn popup_start_recording(
-    app_identifier: String,
-    generation: u64,
-    state: tauri::State<'_, MeetingDetectionManagedState>,
-) -> Result<(), String> {
-    let guard = state.lock().await;
-    if let Some(handle) = &guard.handle {
+/// Called by the tray menu when user clicks "Start Recording (app)"
+pub async fn start_detected_recording<R: Runtime>(app: &AppHandle<R>) {
+    let (meeting, handle) = {
+        let state = app.state::<MeetingDetectionManagedState>();
+        let mut guard = state.lock().await;
+        let meeting = guard.detected_meeting.take();
+        let handle = guard.handle.clone();
+        (meeting, handle)
+    };
+
+    if let (Some(meeting), Some(handle)) = (meeting, handle) {
+        // Tell coordinator the user accepted
         handle
             .send(DetectionEvent::PopupAccepted {
-                app_identifier,
-                generation,
+                app_identifier: meeting.app_identifier,
+                generation: 0, // Not used for tray-based flow
             })
             .await;
     }
-    Ok(())
-}
 
-/// Called by the popup window when user clicks "Dismiss"
-#[tauri::command]
-pub async fn popup_dismiss(
-    app_identifier: String,
-    state: tauri::State<'_, MeetingDetectionManagedState>,
-) -> Result<(), String> {
-    let guard = state.lock().await;
-    if let Some(handle) = &guard.handle {
-        handle
-            .send(DetectionEvent::PopupDismissed { app_identifier })
-            .await;
+    // Update tray to remove the detected meeting item
+    crate::tray::update_tray_menu(app);
+
+    // Hide the app so focus returns to the meeting
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.hide();
     }
-    Ok(())
 }
 
 // ============================================================================
-// SYSTEM AUDIO MONITORING BRIDGE
+// MICROPHONE MONITORING (primary meeting detection signal)
 // ============================================================================
 
-/// Starts CoreAudio monitoring and feeds events to the detection actor.
-/// Uses the detailed app list (with bundle IDs) for proper identification.
+/// Polls which apps are using the microphone every few seconds.
 fn start_audio_monitoring<R: Runtime>(
     _app: AppHandle<R>,
     handle: MeetingDetectionHandle,
     shutdown: tokio_util::sync::CancellationToken,
 ) {
-    #[cfg(target_os = "macos")]
-    {
-        use crate::audio::system_detector::{
-            new_system_audio_callback, SystemAudioDetector, SystemAudioEvent,
-        };
+    tokio::spawn(async move {
+        tracing::info!("Meeting detection: mic monitoring started (polling every 3s)");
 
-        let handle_clone = handle.clone();
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        // Create callback that sends events to the actor.
-        // AudioAppInfo now comes directly from the event (resolved in the
-        // same thread that queries CoreAudio, avoiding empty re-query issues).
-        let callback = new_system_audio_callback(move |event| {
-            match event {
-                SystemAudioEvent::SystemAudioStarted(audio_apps) => {
-                    tracing::info!(
-                        "Meeting detection: audio apps detected: {:?}",
-                        audio_apps.iter().map(|a| format!("{}({})", a.display_name, a.bundle_id)).collect::<Vec<_>>()
-                    );
-
-                    let apps: Vec<super::AppInfo> = audio_apps
-                        .into_iter()
-                        .map(|app| {
-                            // Use starts_with for browser matching — Chrome helper
-                            // processes have IDs like "com.google.Chrome.helper"
-                            let is_browser = super::MACOS_BROWSER_BUNDLE_IDS
-                                .iter()
-                                .any(|bid| app.bundle_id.starts_with(bid));
-
-                            if is_browser {
-                                tracing::info!(
-                                    "Meeting detection: identified browser: {} ({}), pid={}",
-                                    app.display_name, app.bundle_id, app.pid
-                                );
-                            }
-
-                            super::AppInfo {
-                                identifier: app.bundle_id,
-                                display_name: app.display_name,
-                                is_browser,
-                                pid: Some(app.pid),
-                            }
-                        })
-                        .collect();
-
-                    handle_clone.try_send(DetectionEvent::AppsUsingAudio(apps));
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    tracing::info!("Meeting detection: mic monitoring stopped");
+                    break;
                 }
-                SystemAudioEvent::SystemAudioStopped => {
-                    // Send empty list to trigger diff (stopped apps detected)
-                    handle_clone.try_send(DetectionEvent::AppsUsingAudio(vec![]));
+                _ = interval.tick() => {
+                    let apps = super::mic_detector::list_mic_using_apps();
+
+                    if !apps.is_empty() {
+                        tracing::info!(
+                            "Meeting detection: apps using mic: {:?}",
+                            apps.iter().map(|a| format!("{}({})", a.display_name, a.identifier)).collect::<Vec<_>>()
+                        );
+                    }
+
+                    handle.try_send(DetectionEvent::AppsUsingAudio(apps));
                 }
             }
-        });
-
-        // Start the detector in a background task
-        tokio::spawn(async move {
-            let mut detector = SystemAudioDetector::new();
-            detector.start(callback);
-
-            // Keep alive until shutdown
-            shutdown.cancelled().await;
-            detector.stop();
-            tracing::info!("System audio monitoring stopped");
-        });
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        tracing::warn!("Meeting detection audio monitoring not yet supported on this platform");
-    }
+        }
+    });
 }

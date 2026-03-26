@@ -740,8 +740,6 @@ pub fn run() {
             audio::meeting_detection::commands::enable_meeting_detection,
             audio::meeting_detection::commands::disable_meeting_detection,
             audio::meeting_detection::commands::get_meeting_detection_enabled,
-            audio::meeting_detection::commands::popup_start_recording,
-            audio::meeting_detection::commands::popup_dismiss,
             // Screen Recording permission commands
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,

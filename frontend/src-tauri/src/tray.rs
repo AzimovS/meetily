@@ -47,6 +47,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
                 let _ = window.eval("window.location.assign('/settings')");
             }
         }
+        "start_detected_recording" => start_detected_recording_handler(app),
         "toggle_detection" => toggle_detection_handler(app),
         "check_updates" => check_updates_handler(app),
         "quit" => app.exit(0),
@@ -198,6 +199,13 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
                 update_tray_menu_async(&app_clone).await;
             }
         }
+    });
+}
+
+fn start_detected_recording_handler<R: Runtime>(app: &AppHandle<R>) {
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::audio::meeting_detection::commands::start_detected_recording(&app_clone).await;
     });
 }
 
@@ -360,6 +368,26 @@ fn build_menu<R: Runtime>(
     } else {
         match state {
             RecordingState::Stopped => {
+                // If a meeting was detected, show a prominent "Start Recording" item for it
+                let detected = {
+                    use tauri::Manager;
+                    app.try_state::<crate::audio::meeting_detection::commands::MeetingDetectionManagedState>()
+                        .and_then(|state| {
+                            state.try_lock().ok().and_then(|g| g.detected_meeting.clone())
+                        })
+                };
+
+                if let Some(meeting) = detected {
+                    let label = if let Some(title) = &meeting.meeting_title {
+                        format!("● Start Recording ({})", title)
+                    } else {
+                        format!("● Start Recording ({})", meeting.app_name)
+                    };
+                    builder = builder
+                        .item(&MenuItemBuilder::with_id("start_detected_recording", &label).build(app)?)
+                        .item(&PredefinedMenuItem::separator(app)?);
+                }
+
                 builder = builder
                     .item(&MenuItemBuilder::with_id("toggle_recording", "Start Recording").build(app)?);
             }

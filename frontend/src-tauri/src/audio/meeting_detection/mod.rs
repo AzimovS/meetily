@@ -7,6 +7,7 @@
 pub mod coordinator;
 pub mod commands;
 pub mod browser_detector;
+pub mod mic_detector;
 
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -84,13 +85,14 @@ pub enum DetectionEvent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum SideEffect {
-    ShowPopup {
+    /// Meeting detected — show native notification + update tray menu
+    MeetingDetected {
         app_name: String,
         app_identifier: String,
         meeting_title: Option<String>,
-        generation: u64,
     },
-    DismissPopup,
+    /// Meeting detection cleared (timeout/dismissed) — revert tray menu
+    MeetingDetectionCleared,
     StartRecording {
         meeting_name: String,
     },
@@ -98,6 +100,14 @@ pub enum SideEffect {
     ShowGraceNotification {
         seconds_remaining: u32,
     },
+}
+
+/// Detected meeting info shared between coordinator and tray menu
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectedMeeting {
+    pub app_name: String,
+    pub app_identifier: String,
+    pub meeting_title: Option<String>,
 }
 
 // ============================================================================
