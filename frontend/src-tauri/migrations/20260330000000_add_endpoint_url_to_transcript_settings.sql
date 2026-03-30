@@ -11,7 +11,7 @@
 --   remote rows (e.g. SET model = '' WHERE provider = 'remote') once Phase 1 is stable.
 --   This is safe to skip -- the fallback in engine.rs handles both states.
 
-PRAGMA defer_foreign_keys = ON;
+PRAGMA foreign_keys=off;
 
 CREATE TABLE IF NOT EXISTS transcript_settings_new (
     id TEXT PRIMARY KEY,
@@ -46,3 +46,5 @@ FROM transcript_settings;
 DROP TABLE transcript_settings;
 
 ALTER TABLE transcript_settings_new RENAME TO transcript_settings;
+
+PRAGMA foreign_keys=on;

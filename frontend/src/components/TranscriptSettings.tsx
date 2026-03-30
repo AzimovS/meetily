@@ -39,7 +39,6 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
 
     const isDoneDisabled =
         (uiProvider === 'remote' && !uiEndpointUrl?.trim()) ||
-        (uiProvider === 'remote' && !uiModel?.trim()) ||
         (isRemoteProvider && !uiModel?.trim()) ||
         (requiresApiKey && !uiApiKey?.trim());
 
