@@ -2,6 +2,14 @@
 -- For 'remote' provider, the model column currently stores the endpoint URL.
 -- This migration adds a dedicated endpointUrl column and copies the URL there,
 -- while keeping the URL in model as a backward-compatible fallback.
+--
+-- TWO-PHASE DEPLOYMENT:
+-- Phase 1 (this migration): URL is stored in BOTH model and endpointUrl for remote rows.
+--   The Rust code reads endpointUrl first and falls back to model. This ensures that if
+--   anything goes wrong, the app still works using the old model column.
+-- Phase 2 (future, optional): A follow-up migration can clear the URL from model for
+--   remote rows (e.g. SET model = '' WHERE provider = 'remote') once Phase 1 is stable.
+--   This is safe to skip -- the fallback in engine.rs handles both states.
 
 PRAGMA defer_foreign_keys = ON;
 
