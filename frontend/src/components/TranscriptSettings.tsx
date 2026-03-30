@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 export interface TranscriptModelProps {
     provider: 'localWhisper' | 'parakeet' | 'remote' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
     model: string;
+    endpointUrl?: string | null;
     apiKey?: string | null;
 }
 
@@ -28,6 +29,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     // Local draft state -- only pushed to context on Save (remote) or model select (local)
     const [uiProvider, setUiProvider] = useState<TranscriptModelProps['provider']>(transcriptModelConfig.provider);
     const [uiModel, setUiModel] = useState(transcriptModelConfig.model);
+    const [uiEndpointUrl, setUiEndpointUrl] = useState(transcriptModelConfig.endpointUrl || '');
     const [uiApiKey, setUiApiKey] = useState<string | null>(transcriptModelConfig.apiKey || null);
     const [apiKeyDirty, setApiKeyDirty] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -36,6 +38,8 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     const requiresApiKey = isRemoteProvider;
 
     const isDoneDisabled =
+        (uiProvider === 'remote' && !uiEndpointUrl?.trim()) ||
+        (uiProvider === 'remote' && !uiModel?.trim()) ||
         (isRemoteProvider && !uiModel?.trim()) ||
         (requiresApiKey && !uiApiKey?.trim());
 
@@ -60,11 +64,13 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
             const config: TranscriptModelProps = {
                 provider: uiProvider,
                 model: uiModel,
+                endpointUrl: uiProvider === 'remote' ? uiEndpointUrl?.trim() || null : null,
                 apiKey: uiApiKey?.trim() || null,
             };
             await invoke('api_save_transcript_config', {
                 provider: config.provider,
                 model: config.model,
+                endpointUrl: config.endpointUrl,
                 apiKey: config.apiKey,
             });
 
@@ -113,13 +119,17 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
 
                                 if (provider === 'remote') {
                                     const existingUrl = transcriptModelConfig.provider === 'remote'
+                                        ? (transcriptModelConfig.endpointUrl || '') : '';
+                                    const existingModel = transcriptModelConfig.provider === 'remote'
                                         ? transcriptModelConfig.model : '';
-                                    setUiModel(existingUrl);
+                                    setUiEndpointUrl(existingUrl);
+                                    setUiModel(existingModel);
                                     fetchApiKey('remote');
                                 } else if (LOCAL_PROVIDERS.has(provider)) {
                                     const existingModel = transcriptModelConfig.provider === provider
                                         ? transcriptModelConfig.model : '';
                                     setUiModel(existingModel);
+                                    setUiEndpointUrl('');
                                 }
                             }}
                         >
@@ -156,19 +166,34 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                 )}
 
                 {uiProvider === 'remote' && (
-                    <div>
-                        <Label>Endpoint URL</Label>
-                        <Input
-                            type="url"
-                            className="mt-1"
-                            value={uiModel}
-                            onChange={(e) => setUiModel(e.target.value)}
-                            placeholder="e.g. https://your-server/v1/audio/transcriptions"
-                        />
-                        <p className="text-xs text-muted-foreground mt-1">
-                            The full URL of your OpenAI-compatible transcription endpoint
-                        </p>
-                    </div>
+                    <>
+                        <div>
+                            <Label>Endpoint URL</Label>
+                            <Input
+                                type="url"
+                                className="mt-1"
+                                value={uiEndpointUrl}
+                                onChange={(e) => setUiEndpointUrl(e.target.value)}
+                                placeholder="e.g. https://your-server/v1/audio/transcriptions"
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">
+                                The full URL of your OpenAI-compatible transcription endpoint
+                            </p>
+                        </div>
+                        <div>
+                            <Label>Model Name</Label>
+                            <Input
+                                className="mt-1"
+                                value={uiModel}
+                                onChange={(e) => setUiModel(e.target.value)}
+                                placeholder="e.g. whisper-1, whisper-large-v3"
+                                maxLength={256}
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">
+                                The model identifier to send with transcription requests
+                            </p>
+                        </div>
+                    </>
                 )}
 
                 {requiresApiKey && (

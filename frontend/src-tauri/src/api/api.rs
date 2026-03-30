@@ -99,6 +99,8 @@ pub struct GetApiKeyRequest {
 pub struct TranscriptConfig {
     pub provider: String,
     pub model: String,
+    #[serde(rename = "endpointUrl")]
+    pub endpoint_url: Option<String>,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
 }
@@ -107,6 +109,8 @@ pub struct TranscriptConfig {
 pub struct SaveTranscriptConfigRequest {
     pub provider: String,
     pub model: String,
+    #[serde(rename = "endpointUrl")]
+    pub endpoint_url: Option<String>,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
 }
@@ -622,6 +626,7 @@ pub async fn api_get_transcript_config<R: Runtime>(
                     Ok(Some(TranscriptConfig {
                         provider: config.provider,
                         model: config.model,
+                        endpoint_url: config.endpoint_url,
                         api_key,
                     }))
                 }
@@ -640,6 +645,7 @@ pub async fn api_get_transcript_config<R: Runtime>(
             Ok(Some(TranscriptConfig {
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
+                endpoint_url: None,
                 api_key: None,
             }))
         }
@@ -656,6 +662,7 @@ pub async fn api_save_transcript_config<R: Runtime>(
     state: tauri::State<'_, AppState>,
     provider: String,
     model: String,
+    endpoint_url: Option<String>,
     api_key: Option<String>,
     _auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
@@ -665,7 +672,14 @@ pub async fn api_save_transcript_config<R: Runtime>(
     );
     let pool = state.db_manager.pool();
 
-    if let Err(e) = SettingsRepository::save_transcript_config(pool, &provider, &model).await {
+    if let Err(e) = SettingsRepository::save_transcript_config(
+        pool,
+        &provider,
+        &model,
+        endpoint_url.as_deref(),
+    )
+    .await
+    {
         log_error!("Failed to save transcript config: {}", e);
         return Err(e.to_string());
     }

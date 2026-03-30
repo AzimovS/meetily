@@ -73,6 +73,7 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
             crate::api::api::TranscriptConfig {
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
+                endpoint_url: None,
                 api_key: None,
             }
         }
@@ -81,6 +82,7 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
             crate::api::api::TranscriptConfig {
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
+                endpoint_url: None,
                 api_key: None,
             }
         }
@@ -137,12 +139,22 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
         }
         "remote" => {
             info!("🔍 Validating remote transcription configuration...");
+            // Use endpoint_url if available, fall back to model for backward compatibility
+            let url = config.endpoint_url.clone()
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| config.model.clone());
+            let model_name = if config.endpoint_url.is_some() {
+                config.model.clone()
+            } else {
+                String::new()
+            };
             // Delegate to RemoteProvider::new for validation (single source of truth)
             super::remote_provider::RemoteProvider::new(
-                config.model.clone(),
+                url.clone(),
                 config.api_key.clone().unwrap_or_default(),
+                model_name,
             )?;
-            info!("✅ Remote transcription configuration valid for URL: {}", config.model);
+            info!("✅ Remote transcription configuration valid");
             Ok(())
         }
         other => {
@@ -179,6 +191,7 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
             crate::api::api::TranscriptConfig {
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
+                endpoint_url: None,
                 api_key: None,
             }
         }
@@ -187,6 +200,7 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
             crate::api::api::TranscriptConfig {
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
+                endpoint_url: None,
                 api_key: None,
             }
         }
@@ -224,9 +238,19 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
         }
         "remote" => {
             info!("☁️ Initializing remote transcription engine");
+            // Use endpoint_url if available, fall back to model for backward compatibility
+            let url = config.endpoint_url.clone()
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| config.model.clone());
+            let model_name = if config.endpoint_url.is_some() {
+                config.model.clone()
+            } else {
+                String::new()
+            };
             let provider = super::remote_provider::RemoteProvider::new(
-                config.model.clone(),
+                url,
                 config.api_key.unwrap_or_default(),
+                model_name,
             ).map_err(|e| format!("Failed to create remote transcription provider: {}", e))?;
             Ok(TranscriptionEngine::Provider(Arc::new(provider)))
         }

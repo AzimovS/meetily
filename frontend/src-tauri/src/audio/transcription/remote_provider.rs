@@ -12,11 +12,12 @@ use log::{info, warn};
 pub struct RemoteProvider {
     url: String,
     api_key: String,
+    model_name: String,
     client: reqwest::Client,
 }
 
 impl RemoteProvider {
-    pub fn new(url: String, api_key: String) -> Result<Self, String> {
+    pub fn new(url: String, api_key: String, model_name: String) -> Result<Self, String> {
         if url.is_empty() {
             return Err("Remote transcription URL not configured".to_string());
         }
@@ -24,8 +25,16 @@ impl RemoteProvider {
             return Err("Remote transcription API key not configured".to_string());
         }
 
+        // Validate model name length and characters
+        if model_name.len() > 256 {
+            return Err("Model name must be 256 characters or fewer".to_string());
+        }
+        if model_name.chars().any(|c| c.is_control() && c != '\t') {
+            return Err("Model name must not contain control characters".to_string());
+        }
+
         // Validate URL scheme — require HTTPS except for localhost
-        match url::Url::parse(&url) {
+        let parsed_url = match url::Url::parse(&url) {
             Ok(parsed) => {
                 let is_localhost = parsed.host_str()
                     .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
@@ -36,19 +45,25 @@ impl RemoteProvider {
                         parsed.scheme()
                     ));
                 }
+                parsed
             }
             Err(e) => return Err(format!("Invalid remote transcription URL: {}", e)),
-        }
+        };
 
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-        info!("Remote transcription provider initialized for URL: {}", url);
+
+        // Log URL without query params to avoid leaking tokens
+        let sanitized_url = format!("{}://{}{}", parsed_url.scheme(), parsed_url.host_str().unwrap_or("unknown"), parsed_url.path());
+        info!("Remote transcription provider initialized for URL: {}, model: {}", sanitized_url, if model_name.is_empty() { "(none)" } else { &model_name });
+
         Ok(Self {
             url,
             api_key,
+            model_name,
             client,
         })
     }
@@ -110,6 +125,11 @@ impl TranscriptionProvider for RemoteProvider {
         let mut form = reqwest::multipart::Form::new()
             .part("file", file_part);
 
+        // Send model parameter if configured (required by OpenAI, optional for self-hosted)
+        if !self.model_name.is_empty() {
+            form = form.text("model", self.model_name.clone());
+        }
+
         // Forward language parameter if provided (OpenAI-compatible endpoints accept this)
         if let Some(lang) = language {
             form = form.text("language", lang);
@@ -168,7 +188,11 @@ impl TranscriptionProvider for RemoteProvider {
     }
 
     async fn get_current_model(&self) -> Option<String> {
-        Some("remote".to_string())
+        if self.model_name.is_empty() {
+            Some("remote".to_string())
+        } else {
+            Some(self.model_name.clone())
+        }
     }
 
     fn provider_name(&self) -> &'static str {
