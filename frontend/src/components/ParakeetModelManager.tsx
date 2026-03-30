@@ -200,6 +200,7 @@ export function ParakeetModelManager({
       await invoke('api_save_transcript_config', {
         provider: 'parakeet',
         model: modelName,
+        endpointUrl: null,
         apiKey: null
       });
     } catch (error) {

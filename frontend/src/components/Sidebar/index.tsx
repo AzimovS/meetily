@@ -220,6 +220,7 @@ const Sidebar: React.FC = () => {
       const payload = {
         provider: configToSave.provider,
         model: configToSave.model,
+        endpointUrl: configToSave.endpointUrl ?? null,
         apiKey: configToSave.apiKey ?? null
       };
       console.log('Saving transcript config with payload:', payload);
@@ -227,6 +228,7 @@ const Sidebar: React.FC = () => {
       await invoke('api_save_transcript_config', {
         provider: payload.provider,
         model: payload.model,
+        endpointUrl: payload.endpointUrl,
         apiKey: payload.apiKey,
       });
 
