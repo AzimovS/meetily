@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Input } from './ui/input';
@@ -33,6 +33,16 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     const [uiApiKey, setUiApiKey] = useState<string | null>(transcriptModelConfig.apiKey || null);
     const [apiKeyDirty, setApiKeyDirty] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+
+    // Sync local draft state when the context config updates (e.g., async load on mount)
+    useEffect(() => {
+        setUiProvider(transcriptModelConfig.provider);
+        setUiModel(transcriptModelConfig.model);
+        setUiEndpointUrl(transcriptModelConfig.endpointUrl || '');
+        if (!apiKeyDirty) {
+            setUiApiKey(transcriptModelConfig.apiKey || null);
+        }
+    }, [transcriptModelConfig]);
 
     const isRemoteProvider = !LOCAL_PROVIDERS.has(uiProvider);
     const requiresApiKey = isRemoteProvider;
