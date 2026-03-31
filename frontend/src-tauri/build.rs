@@ -27,11 +27,15 @@ fn detect_and_report_gpu_capabilities() {
 
     println!("cargo:warning=🚀 Building Meetily for: {}", target_os);
 
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+
     match target_os.as_str() {
         "macos" => {
-            println!("cargo:warning=✅ macOS: Metal GPU acceleration ENABLED by default");
-            #[cfg(feature = "coreml")]
-            println!("cargo:warning=✅ CoreML acceleration ENABLED");
+            if target_arch == "aarch64" {
+                println!("cargo:warning=✅ macOS (Apple Silicon): Metal + CoreML GPU acceleration ENABLED");
+            } else {
+                println!("cargo:warning=ℹ️  macOS (Intel): CPU-only mode (no Metal/CoreML acceleration)");
+            }
         }
         "windows" => {
             if cfg!(feature = "cuda") {

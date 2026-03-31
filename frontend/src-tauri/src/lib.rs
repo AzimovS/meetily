@@ -44,13 +44,15 @@ async fn debug_check_update() -> Result<String, String> {
     // Step 3: Check platforms
     if let Some(platforms) = json["platforms"].as_object() {
         report.push_str(&format!("Platforms: {:?}\n", platforms.keys().collect::<Vec<_>>()));
-        if let Some(darwin) = platforms.get("darwin-aarch64") {
-            report.push_str(&format!("darwin-aarch64 URL: {}\n",
-                darwin["url"].as_str().unwrap_or("MISSING")));
-            report.push_str(&format!("darwin-aarch64 sig length: {}\n",
-                darwin["signature"].as_str().map(|s| s.len()).unwrap_or(0)));
-        } else {
-            report.push_str("ERROR: darwin-aarch64 platform MISSING\n");
+        for arch in &["darwin-aarch64", "darwin-x86_64"] {
+            if let Some(entry) = platforms.get(*arch) {
+                report.push_str(&format!("{} URL: {}\n",
+                    arch, entry["url"].as_str().unwrap_or("MISSING")));
+                report.push_str(&format!("{} sig length: {}\n",
+                    arch, entry["signature"].as_str().map(|s| s.len()).unwrap_or(0)));
+            } else {
+                report.push_str(&format!("{} platform: not present\n", arch));
+            }
         }
     } else {
         report.push_str("ERROR: No platforms object in JSON\n");
