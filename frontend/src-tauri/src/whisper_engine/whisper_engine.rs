@@ -51,10 +51,16 @@ pub struct WhisperEngine {
 impl WhisperEngine {
     /// Detect available GPU acceleration capabilities
     fn detect_gpu_acceleration() -> bool {
-        // On macOS, prefer Metal GPU acceleration
-        if cfg!(target_os = "macos") {
-            log::info!("macOS detected - attempting to enable Metal GPU acceleration");
-            return true; // Enable GPU by default on macOS, whisper-rs will fallback if needed
+        // On macOS Apple Silicon, enable Metal GPU acceleration
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            log::info!("Apple Silicon detected - enabling Metal GPU acceleration");
+            return true;
+        }
+
+        // Intel Mac: no Metal Family 7 support for whisper.cpp, use CPU
+        if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+            log::info!("Intel Mac detected - using CPU-only transcription (no Metal acceleration)");
+            return false;
         }
 
         // Check for CUDA support on other platforms

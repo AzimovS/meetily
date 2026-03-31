@@ -108,6 +108,9 @@ jobs:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
             target: "aarch64-apple-darwin"
+          - platform: "macos-latest"
+            args: "--target x86_64-apple-darwin"
+            target: "x86_64-apple-darwin"
           - platform: "windows-latest"
             args: ""
             target: "x86_64-pc-windows-msvc"
@@ -127,9 +130,100 @@ jobs:
       release-id: ${{ needs.create-release.outputs.release-id }}
     secrets: inherit
 
-  # STEP 3: Show release summary
-  release-summary:
+  # STEP 3: Merge latest.json from all platform builds
+  # When multiple builds upload to the same release, the last tauri-action to finish
+  # overwrites latest.json with only its platform. This step merges all platforms.
+  merge-update-manifest:
     needs: [create-release, build-all-platforms]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Merge latest.json from all platform builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          RELEASE_ID="${{ needs.create-release.outputs.release-id }}"
+
+          echo "Downloading current latest.json..."
+          gh release download "v${VERSION}" --repo "${{ github.repository }}" --pattern "latest.json" --dir . 2>/dev/null || true
+
+          if [ ! -f latest.json ]; then
+            echo "No latest.json found, creating empty manifest"
+            echo '{"version":"'"${VERSION}"'","notes":"Release '"${VERSION}"'","pub_date":"'"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"'","platforms":{}}' > latest.json
+          fi
+
+          echo "Current latest.json:"
+          cat latest.json
+          echo ""
+
+          # Get all release assets to find platform bundles
+          ASSETS=$(gh api repos/${{ github.repository }}/releases/${RELEASE_ID}/assets --jq '.[] | .name')
+          echo "Release assets:"
+          echo "$ASSETS"
+          echo ""
+
+          # Build merged manifest using node inline script
+          node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync("latest.json", "utf8"));
+            const assets = `'"${ASSETS}"'`.split("\n").filter(Boolean);
+            const version = "'"${VERSION}"'";
+            const repo = "'"${{ github.repository }}"'";
+            const baseUrl = `https://github/${repo}/releases/download/v${version}`;
+
+            // Map platform patterns to Tauri platform keys
+            const platformMap = [
+              { pattern: /aarch64-apple-darwin.*\.app\.tar\.gz$/, key: "darwin-aarch64" },
+              { pattern: /x86_64-apple-darwin.*\.app\.tar\.gz$/,  key: "darwin-x86_64" },
+              { pattern: /x64.*\.nsis\.zip$|\.exe$/,              key: "windows-x86_64" },
+              { pattern: /amd64\.AppImage\.tar\.gz$/,             key: "linux-x86_64" },
+            ];
+
+            for (const asset of assets) {
+              for (const { pattern, key } of platformMap) {
+                if (pattern.test(asset)) {
+                  const sigAsset = assets.find(a => a === asset + ".sig");
+                  let signature = "";
+                  // Signature will be downloaded separately if needed
+                  if (manifest.platforms[key]) {
+                    signature = manifest.platforms[key].signature || "";
+                  }
+                  manifest.platforms[key] = {
+                    signature,
+                    url: `https://github.com/${repo}/releases/download/v${version}/${asset}`
+                  };
+                  console.log(`Found ${key}: ${asset}`);
+                }
+              }
+            }
+
+            manifest.version = version;
+            fs.writeFileSync("latest.json", JSON.stringify(manifest, null, 2));
+            console.log("\nMerged manifest platforms:", Object.keys(manifest.platforms));
+          '
+
+          echo ""
+          echo "Merged latest.json:"
+          cat latest.json
+          echo ""
+
+          # Delete old latest.json from release and upload merged version
+          ASSET_ID=$(gh api repos/${{ github.repository }}/releases/${RELEASE_ID}/assets --jq '.[] | select(.name == "latest.json") | .id')
+          if [ -n "$ASSET_ID" ]; then
+            echo "Deleting old latest.json (asset ID: $ASSET_ID)..."
+            gh api -X DELETE repos/${{ github.repository }}/releases/assets/${ASSET_ID}
+          fi
+
+          echo "Uploading merged latest.json..."
+          gh release upload "v${VERSION}" latest.json --repo "${{ github.repository }}" --clobber
+
+          echo "latest.json merge complete"
+
+  # STEP 4: Show release summary
+  release-summary:
+    needs: [create-release, build-all-platforms, merge-update-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -180,14 +274,15 @@ jobs:
           echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }}"
           echo ""
           echo "Uploaded assets (via tauri-action):"
-          echo "  - macOS: DMG installer + app.tar.gz (for updater) + .sig"
+          echo "  - macOS (Apple Silicon): DMG installer + app.tar.gz (for updater) + .sig"
+          echo "  - macOS (Intel): DMG installer + app.tar.gz (for updater) + .sig"
           echo "  - Windows: MSI + NSIS installers + .sig files"
           echo "  - Linux: AppImage + .deb + .sig files"
           echo "  - Updater manifest: latest.json (auto-generated by tauri-action)"
           echo ""
           echo "Next steps:"
           echo "  1. Review the draft release"
-          echo "  2. Verify latest.json contains darwin-aarch64, windows-x86_64, and linux-x86_64"
+          echo "  2. Verify latest.json contains darwin-aarch64, darwin-x86_64, windows-x86_64, and linux-x86_64"
           echo "  3. Publish the release when ready"
           echo "============================================"
 
@@ -202,7 +297,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Platform | Assets |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **macOS** | DMG installer, app.tar.gz (updater), .sig |" >> $GITHUB_STEP_SUMMARY
+          echo "| **macOS (Apple Silicon)** | DMG installer, app.tar.gz (updater), .sig |" >> $GITHUB_STEP_SUMMARY
+          echo "| **macOS (Intel)** | DMG installer, app.tar.gz (updater), .sig |" >> $GITHUB_STEP_SUMMARY
           echo "| **Windows** | MSI installer, NSIS installer, .sig files |" >> $GITHUB_STEP_SUMMARY
           echo "| **Linux** | AppImage (updater), .deb, .sig files |" >> $GITHUB_STEP_SUMMARY
           echo "| **Updater** | latest.json manifest (auto-generated by tauri-action) |" >> $GITHUB_STEP_SUMMARY
@@ -210,6 +306,6 @@ jobs:
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "1. [Review the draft release](https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }})" >> $GITHUB_STEP_SUMMARY
-          echo "2. Verify latest.json contains entries for darwin-aarch64, windows-x86_64, linux-x86_64" >> $GITHUB_STEP_SUMMARY
+          echo "2. Verify latest.json contains entries for darwin-aarch64, darwin-x86_64, windows-x86_64, linux-x86_64" >> $GITHUB_STEP_SUMMARY
           echo "3. Publish the release when ready" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

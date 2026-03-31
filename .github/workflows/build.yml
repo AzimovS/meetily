@@ -108,8 +108,7 @@ jobs:
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Only aarch64-apple-darwin for Apple Silicon (no Intel support)
-          targets: ${{ contains(inputs.platform, 'macos') && 'aarch64-apple-darwin' || '' }}
+          targets: ${{ contains(inputs.platform, 'macos') && inputs.target || '' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -469,11 +468,21 @@ jobs:
           echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}" >> "$GITHUB_ENV"
           echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
 
+      - name: Set cross-compilation env (macOS Intel)
+        if: inputs.target == 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          echo "CMAKE_OSX_ARCHITECTURES=x86_64" >> $GITHUB_ENV
+          echo "Set CMAKE_OSX_ARCHITECTURES=x86_64 for cross-compilation"
+
       - name: Configure build acceleration
         if: contains(inputs.platform, 'macos')
         run: |
-          echo "✓ macOS build will use Metal GPU acceleration (enabled by default)"
-          echo "✓ CoreML acceleration available for Apple Silicon"
+          if [[ "${{ inputs.target }}" == "aarch64-apple-darwin" ]]; then
+            echo "✓ macOS (Apple Silicon) build with Metal + CoreML GPU acceleration"
+          else
+            echo "✓ macOS (Intel) build with CPU-only transcription (no Metal/CoreML)"
+          fi
 
       - name: Patch asset name pattern
         id: patch-release-name
@@ -592,7 +601,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: frontend/src-tauri/binaries/ffmpeg-*
-          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}    
+          key: ${{ runner.os }}-${{ inputs.target }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
 
       - name: Build with Tauri
         id: tauri-build

@@ -166,9 +166,13 @@ cidre = { git = "https://github.com/yury/cidre", rev = "a9587fa", features = ["a
 dasp = "0.11.0"
 futures-channel = "0.3.31"
 
-# PERFORMANCE: Enable Metal GPU + CoreML acceleration automatically on macOS
-# CoreML provides additional acceleration for Apple Silicon chips
+# Apple Silicon: Metal GPU + CoreML acceleration (Neural Engine)
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 whisper-rs = { version = "0.13.2", features = ["raw-api", "metal", "coreml"] }
+
+# Intel Mac: CPU-only (Metal Family 7 unsupported by whisper.cpp, no Neural Engine for CoreML)
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+whisper-rs = { version = "0.13.2", features = ["raw-api"] }
 
 # Windows-specific dependencies
 # Default: CPU-only build (no BLAS)
