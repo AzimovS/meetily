@@ -142,43 +142,43 @@ jobs:
       - name: Merge latest.json from all platform builds
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_VERSION: ${{ needs.create-release.outputs.version }}
+          MERGE_RELEASE_ID: ${{ needs.create-release.outputs.release-id }}
+          MERGE_REPO: ${{ github.repository }}
         run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          RELEASE_ID="${{ needs.create-release.outputs.release-id }}"
-
           echo "Downloading current latest.json..."
-          gh release download "v${VERSION}" --repo "${{ github.repository }}" --pattern "latest.json" --dir . 2>/dev/null || true
+          gh release download "v${MERGE_VERSION}" --repo "${MERGE_REPO}" --pattern "latest.json" --dir . 2>/dev/null || true
 
           if [ ! -f latest.json ]; then
             echo "No latest.json found, creating empty manifest"
-            echo '{"version":"'"${VERSION}"'","notes":"Release '"${VERSION}"'","pub_date":"'"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"'","platforms":{}}' > latest.json
+            echo '{"version":"'"${MERGE_VERSION}"'","notes":"Release '"${MERGE_VERSION}"'","pub_date":"'"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"'","platforms":{}}' > latest.json
           fi
 
           echo "Current latest.json:"
           cat latest.json
           echo ""
 
-          # Get all release assets
-          ASSETS=$(gh api repos/${{ github.repository }}/releases/${RELEASE_ID}/assets --jq '.[] | .name')
+          # Write asset list to file (avoids shell-to-JS injection via string interpolation)
+          gh api repos/${MERGE_REPO}/releases/${MERGE_RELEASE_ID}/assets --jq '.[] | .name' > assets.txt
           echo "Release assets:"
-          echo "$ASSETS"
+          cat assets.txt
           echo ""
 
           # Download all .sig files so signatures can be read
           mkdir -p sigs
-          gh release download "v${VERSION}" --repo "${{ github.repository }}" --pattern "*.sig" --dir sigs 2>/dev/null || true
+          gh release download "v${MERGE_VERSION}" --repo "${MERGE_REPO}" --pattern "*.sig" --dir sigs 2>/dev/null || true
           echo "Downloaded signature files:"
           ls -la sigs/ 2>/dev/null || echo "  (none)"
           echo ""
 
-          # Build merged manifest using node inline script
+          # Build merged manifest — reads from files, no shell interpolation into JS
           node -e '
             const fs = require("fs");
             const path = require("path");
             const manifest = JSON.parse(fs.readFileSync("latest.json", "utf8"));
-            const assets = `'"${ASSETS}"'`.split("\n").filter(Boolean);
-            const version = "'"${VERSION}"'";
-            const repo = "'"${{ github.repository }}"'";
+            const assets = fs.readFileSync("assets.txt", "utf8").split("\n").filter(Boolean);
+            const version = process.env.MERGE_VERSION;
+            const repo = process.env.MERGE_REPO;
 
             // Patterns match actual tauri-action filenames (verified against v0.1.14)
             // e.g. meetily_aarch64.app.tar.gz, meetily_0.1.14_amd64.AppImage
@@ -198,22 +198,29 @@ jobs:
                   try {
                     signature = fs.readFileSync(sigPath, "utf8").trim();
                   } catch (e) {
-                    // Fall back to existing manifest entry if .sig file not available
+                    // Fall back to existing manifest entry
                     if (manifest.platforms[key]) {
                       signature = manifest.platforms[key].signature || "";
                     }
-                    if (!signature) {
-                      console.warn(`  Warning: no signature for ${key} (${asset})`);
-                    }
                   }
 
-                  manifest.platforms[key] = {
-                    signature,
-                    url: `https://github.com/${repo}/releases/download/v${version}/${asset}`
-                  };
-                  console.log(`Found ${key}: ${asset}` + (signature ? " (sig OK)" : " (NO SIG)"));
+                  if (!signature) {
+                    console.error(`FATAL: no signature for ${key} (${asset})`);
+                    process.exit(1);
+                  }
+
+                  manifest.platforms[key] = { signature, url: `https://github.com/${repo}/releases/download/v${version}/${asset}` };
+                  console.log(`Found ${key}: ${asset} (sig OK)`);
                 }
               }
+            }
+
+            // Validate all expected platforms are present
+            const expected = ["darwin-aarch64", "darwin-x86_64", "windows-x86_64", "linux-x86_64"];
+            const missing = expected.filter(k => !manifest.platforms[k]);
+            if (missing.length > 0) {
+              console.error("FATAL: Missing platforms in manifest:", missing.join(", "));
+              process.exit(1);
             }
 
             manifest.version = version;
@@ -226,15 +233,9 @@ jobs:
           cat latest.json
           echo ""
 
-          # Delete old latest.json from release and upload merged version
-          ASSET_ID=$(gh api repos/${{ github.repository }}/releases/${RELEASE_ID}/assets --jq '.[] | select(.name == "latest.json") | .id')
-          if [ -n "$ASSET_ID" ]; then
-            echo "Deleting old latest.json (asset ID: $ASSET_ID)..."
-            gh api -X DELETE repos/${{ github.repository }}/releases/assets/${ASSET_ID}
-          fi
-
+          # Upload merged latest.json (--clobber replaces atomically)
           echo "Uploading merged latest.json..."
-          gh release upload "v${VERSION}" latest.json --repo "${{ github.repository }}" --clobber
+          gh release upload "v${MERGE_VERSION}" latest.json --repo "${MERGE_REPO}" --clobber
 
           echo "latest.json merge complete"
 
