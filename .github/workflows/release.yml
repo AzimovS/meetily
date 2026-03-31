@@ -158,43 +158,60 @@ jobs:
           cat latest.json
           echo ""
 
-          # Get all release assets to find platform bundles
+          # Get all release assets
           ASSETS=$(gh api repos/${{ github.repository }}/releases/${RELEASE_ID}/assets --jq '.[] | .name')
           echo "Release assets:"
           echo "$ASSETS"
           echo ""
 
+          # Download all .sig files so signatures can be read
+          mkdir -p sigs
+          gh release download "v${VERSION}" --repo "${{ github.repository }}" --pattern "*.sig" --dir sigs 2>/dev/null || true
+          echo "Downloaded signature files:"
+          ls -la sigs/ 2>/dev/null || echo "  (none)"
+          echo ""
+
           # Build merged manifest using node inline script
           node -e '
             const fs = require("fs");
+            const path = require("path");
             const manifest = JSON.parse(fs.readFileSync("latest.json", "utf8"));
             const assets = `'"${ASSETS}"'`.split("\n").filter(Boolean);
             const version = "'"${VERSION}"'";
             const repo = "'"${{ github.repository }}"'";
-            const baseUrl = `https://github/${repo}/releases/download/v${version}`;
 
-            // Map platform patterns to Tauri platform keys
+            // Patterns match actual tauri-action filenames (verified against v0.1.14)
+            // e.g. meetily_aarch64.app.tar.gz, meetily_0.1.14_amd64.AppImage
             const platformMap = [
-              { pattern: /aarch64-apple-darwin.*\.app\.tar\.gz$/, key: "darwin-aarch64" },
-              { pattern: /x86_64-apple-darwin.*\.app\.tar\.gz$/,  key: "darwin-x86_64" },
-              { pattern: /x64.*\.nsis\.zip$|\.exe$/,              key: "windows-x86_64" },
-              { pattern: /amd64\.AppImage\.tar\.gz$/,             key: "linux-x86_64" },
+              { pattern: /_aarch64\.app\.tar\.gz$/,  key: "darwin-aarch64" },
+              { pattern: /_x86_64\.app\.tar\.gz$/,   key: "darwin-x86_64" },
+              { pattern: /_x64_en-US\.msi$/,         key: "windows-x86_64" },
+              { pattern: /_amd64\.AppImage$/,         key: "linux-x86_64" },
             ];
 
             for (const asset of assets) {
               for (const { pattern, key } of platformMap) {
                 if (pattern.test(asset)) {
-                  const sigAsset = assets.find(a => a === asset + ".sig");
+                  // Read signature from downloaded .sig file
                   let signature = "";
-                  // Signature will be downloaded separately if needed
-                  if (manifest.platforms[key]) {
-                    signature = manifest.platforms[key].signature || "";
+                  const sigPath = path.join("sigs", asset + ".sig");
+                  try {
+                    signature = fs.readFileSync(sigPath, "utf8").trim();
+                  } catch (e) {
+                    // Fall back to existing manifest entry if .sig file not available
+                    if (manifest.platforms[key]) {
+                      signature = manifest.platforms[key].signature || "";
+                    }
+                    if (!signature) {
+                      console.warn(`  Warning: no signature for ${key} (${asset})`);
+                    }
                   }
+
                   manifest.platforms[key] = {
                     signature,
                     url: `https://github.com/${repo}/releases/download/v${version}/${asset}`
                   };
-                  console.log(`Found ${key}: ${asset}`);
+                  console.log(`Found ${key}: ${asset}` + (signature ? " (sig OK)" : " (NO SIG)"));
                 }
               }
             }
