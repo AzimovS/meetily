@@ -460,6 +460,7 @@ pub fn run() {
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
         )) as NotificationManagerState<tauri::Wry>)
         .manage(audio::init_system_audio_state())
+        .manage(audio::meeting_detection::commands::init_meeting_detection_state())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             log::info!("Application setup complete");
@@ -467,6 +468,24 @@ pub fn run() {
             // Initialize system tray
             if let Err(e) = tray::create_tray(_app.handle()) {
                 log::error!("Failed to create system tray: {}", e);
+            }
+
+            // Auto-start meeting detection if enabled in settings
+            {
+                let app_for_detection = _app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let settings = audio::meeting_detection::commands::load_settings(&app_for_detection).await;
+                    if settings.enabled {
+                        log::info!("Meeting detection enabled in settings — auto-starting");
+                        let state = app_for_detection.state::<audio::meeting_detection::commands::MeetingDetectionManagedState>();
+                        if let Err(e) = audio::meeting_detection::commands::enable_meeting_detection(
+                            app_for_detection.clone(),
+                            state,
+                        ).await {
+                            log::error!("Failed to auto-start meeting detection: {}", e);
+                        }
+                    }
+                });
             }
 
             // Initialize notification system with proper defaults
@@ -717,6 +736,10 @@ pub fn run() {
             audio::system_audio_commands::start_system_audio_monitoring,
             audio::system_audio_commands::stop_system_audio_monitoring,
             audio::system_audio_commands::get_system_audio_monitoring_status,
+            // Meeting detection commands
+            audio::meeting_detection::commands::enable_meeting_detection,
+            audio::meeting_detection::commands::disable_meeting_detection,
+            audio::meeting_detection::commands::get_meeting_detection_enabled,
             // Screen Recording permission commands
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,

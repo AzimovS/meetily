@@ -80,17 +80,20 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         meeting_name
     );
 
-    // Check if already recording
-    let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
-    info!("🔍 IS_RECORDING state check: {}", current_recording_state);
-    if current_recording_state {
+    // Atomically check and set IS_RECORDING to prevent race conditions
+    // (e.g., notification action + manual start clicking simultaneously)
+    if IS_RECORDING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        info!("🔍 IS_RECORDING already true, recording in progress");
         return Err("Recording already in progress".to_string());
     }
+    info!("🔍 IS_RECORDING atomically set to true");
 
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
     if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
         error!("Model validation failed: {}", validation_error);
+        // Reset IS_RECORDING since we set it atomically above but failed to start
+        IS_RECORDING.store(false, Ordering::SeqCst);
 
         // Emit error event for frontend - actionable: false to show toast instead of modal
         // (download progress is already shown in top-right toast)
@@ -231,10 +234,16 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     });
 
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
-    let transcription_receiver = manager
+    let transcription_receiver = match manager
         .start_recording(microphone_device, system_device, auto_save)
         .await
-        .map_err(|e| format!("Failed to start recording: {}", e))?;
+    {
+        Ok(rx) => rx,
+        Err(e) => {
+            IS_RECORDING.store(false, Ordering::SeqCst);
+            return Err(format!("Failed to start recording: {}", e));
+        }
+    };
 
     // Store the manager globally to keep it alive
     {
@@ -242,10 +251,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         *global_manager = Some(manager);
     }
 
-    // Set recording flag and reset speech detection flag
-    info!("🔍 Setting IS_RECORDING to true and resetting SPEECH_DETECTED_EMITTED");
-    IS_RECORDING.store(true, Ordering::SeqCst);
-    reset_speech_detected_flag(); // Reset for new recording session
+    // Reset speech detection flag for new recording session
+    // (IS_RECORDING was already set atomically via compare_exchange above)
+    reset_speech_detected_flag();
 
     // Start optimized parallel transcription task and store handle
     let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
@@ -324,20 +332,19 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         mic_device_name, system_device_name, meeting_name
     );
 
-    // Check if already recording
-    let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
-    info!("🔍 IS_RECORDING state check: {}", current_recording_state);
-    if current_recording_state {
+    // Atomically check and set IS_RECORDING to prevent race conditions
+    if IS_RECORDING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        info!("🔍 IS_RECORDING already true, recording in progress");
         return Err("Recording already in progress".to_string());
     }
+    info!("🔍 IS_RECORDING atomically set to true");
 
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
     if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
         error!("Model validation failed: {}", validation_error);
+        IS_RECORDING.store(false, Ordering::SeqCst);
 
-        // Emit error event for frontend - actionable: false to show toast instead of modal
-        // (download progress is already shown in top-right toast)
         let _ = app.emit("transcription-error", serde_json::json!({
             "error": validation_error,
             "userMessage": "Recording cannot start: Transcription model is still downloading. Please wait for the download to complete.",
@@ -400,10 +407,16 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     });
 
     // Start recording with specified devices and auto_save setting
-    let transcription_receiver = manager
+    let transcription_receiver = match manager
         .start_recording(mic_device, system_device, auto_save)
         .await
-        .map_err(|e| format!("Failed to start recording: {}", e))?;
+    {
+        Ok(rx) => rx,
+        Err(e) => {
+            IS_RECORDING.store(false, Ordering::SeqCst);
+            return Err(format!("Failed to start recording: {}", e));
+        }
+    };
 
     // Store the manager globally to keep it alive
     {
@@ -411,10 +424,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         *global_manager = Some(manager);
     }
 
-    // Set recording flag and reset speech detection flag
-    info!("🔍 Setting IS_RECORDING to true and resetting SPEECH_DETECTED_EMITTED");
-    IS_RECORDING.store(true, Ordering::SeqCst);
-    reset_speech_detected_flag(); // Reset for new recording session
+    // Reset speech detection flag for new recording session
+    // (IS_RECORDING was already set atomically via compare_exchange above)
+    reset_speech_detected_flag();
 
     // Start optimized parallel transcription task and store handle
     let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);

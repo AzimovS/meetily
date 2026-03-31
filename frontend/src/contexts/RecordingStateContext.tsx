@@ -150,6 +150,21 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         });
         unsubscribers.push(unlistenStarted);
 
+        // Recording started by auto-detection (headless, no UI interaction)
+        const { listen } = await import('@tauri-apps/api/event');
+        const unlistenDetection = await listen('recording-started-by-detection', () => {
+          console.log('[RecordingStateContext] Recording started by meeting detection');
+          setState(prev => ({
+            ...prev,
+            isRecording: true,
+            isPaused: false,
+            isActive: true,
+            status: RecordingStatus.RECORDING,
+          }));
+          startPolling();
+        });
+        unsubscribers.push(unlistenDetection);
+
         // Recording stopped
         const unlistenStopped = await recordingService.onRecordingStopped((payload) => {
           console.log('[RecordingStateContext] Recording stopped event:', payload);

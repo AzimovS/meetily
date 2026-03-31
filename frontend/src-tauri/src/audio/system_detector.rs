@@ -4,10 +4,19 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
 use cidre::{core_audio as ca, os};
 
+/// Extended app info with bundle ID, display name, and PID
+#[derive(Debug, Clone)]
+pub struct AudioAppInfo {
+    pub bundle_id: String,
+    pub display_name: String,
+    pub pid: i32,
+}
+
 /// Event types for system audio detection
 #[derive(Debug, Clone)]
 pub enum SystemAudioEvent {
-    SystemAudioStarted(Vec<String>), // List of apps using system audio
+    /// System audio started — carries detailed app info (bundle IDs, PIDs)
+    SystemAudioStarted(Vec<AudioAppInfo>),
     SystemAudioStopped,
 }
 
@@ -171,18 +180,22 @@ impl MacOSSystemAudioDetector {
                                                     let cb = callback.clone();
                                                     std::thread::spawn(move || {
                                                         let apps = list_system_audio_using_apps();
-                                                        tracing::info!("detect_system_audio_listener: {:?}", apps);
+                                                        // Privacy: don't log app names in release builds
+                                                        #[cfg(debug_assertions)]
+                                                        tracing::debug!("detect_system_audio_listener: {:?}", apps);
 
                                                         if let Ok(guard) = cb.lock() {
                                                             let event = SystemAudioEvent::SystemAudioStarted(apps);
-                                                            tracing::info!(event = ?event, "detected");
+                                                            #[cfg(debug_assertions)]
+                                                            tracing::debug!(event = ?event, "detected");
                                                             (*guard)(event);
                                                         }
                                                     });
                                                 } else {
                                                     if let Ok(guard) = callback.lock() {
                                                         let event = SystemAudioEvent::SystemAudioStopped;
-                                                        tracing::info!(event = ?event, "detected");
+                                                        #[cfg(debug_assertions)]
+                                                        tracing::debug!(event = ?event, "detected");
                                                         (*guard)(event);
                                                     }
                                                 }
@@ -250,7 +263,8 @@ impl MacOSSystemAudioDetector {
                                                         let cb = data.0.clone();
                                                         std::thread::spawn(move || {
                                                             let apps = list_system_audio_using_apps();
-                                                            tracing::info!("detect_system_listener: {:?}", apps);
+                                                            #[cfg(debug_assertions)]
+                                                            tracing::debug!("detect_system_listener: {:?}", apps);
 
                                                             if let Ok(callback_guard) = cb.lock() {
                                                                 (*callback_guard)(SystemAudioEvent::SystemAudioStarted(apps));
@@ -355,27 +369,113 @@ impl MacOSSystemAudioDetector {
 }
 
 #[cfg(target_os = "macos")]
-fn list_system_audio_using_apps() -> Vec<String> {
+pub(crate) fn list_system_audio_using_apps() -> Vec<AudioAppInfo> {
     match ca::System::processes() {
         Ok(processes) => {
             let mut apps = Vec::new();
+
             for process in processes {
-                if process.is_running_output().unwrap_or(false) {
-                    if let Ok(pid) = process.pid() {
-                        if let Some(running_app) = cidre::ns::RunningApp::with_pid(pid) {
-                            let name = running_app
-                                .localized_name()
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| format!("Process {}", pid));
-                            apps.push(name);
+                let is_output = process.is_running_output().unwrap_or(false);
+                let is_input = process.is_running_input().unwrap_or(false);
+
+                if !(is_output || is_input) {
+                    continue;
+                }
+
+                if let Ok(pid) = process.pid() {
+                    // Try NSRunningApplication first (works for main app processes)
+                    if let Some(running_app) = cidre::ns::RunningApp::with_pid(pid) {
+                        let display_name = running_app
+                            .localized_name()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("Process {}", pid));
+                        let bundle_id = running_app
+                            .bundle_id()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("pid.{}", pid));
+                        tracing::info!(
+                            "CoreAudio: {} ({}) pid={} output={} input={}",
+                            display_name, bundle_id, pid, is_output, is_input
+                        );
+                        apps.push(AudioAppInfo { bundle_id, display_name, pid });
+                    } else {
+                        // Helper/subprocess — walk up process tree to find parent app
+                        tracing::info!(
+                            "CoreAudio: pid={} has no NSRunningApp, resolving via process tree",
+                            pid
+                        );
+                        if let Some(app_info) = resolve_parent_app(pid) {
+                            tracing::info!(
+                                "CoreAudio: resolved pid={} → {} ({}) parent_pid={}",
+                                pid, app_info.display_name, app_info.bundle_id, app_info.pid
+                            );
+                            // Avoid duplicates (multiple helpers from same parent)
+                            if !apps.iter().any(|a| a.bundle_id == app_info.bundle_id) {
+                                apps.push(app_info);
+                            }
+                        } else {
+                            tracing::info!(
+                                "CoreAudio: pid={} could not be resolved to a parent app",
+                                pid
+                            );
                         }
                     }
                 }
             }
+
             apps
         }
-        Err(_) => Vec::new(),
+        Err(e) => {
+            tracing::error!("CoreAudio: failed to list processes: {:?}", e);
+            Vec::new()
+        }
     }
+}
+
+/// Walk up the process tree from a helper PID to find the parent application.
+/// Chrome, Edge, Brave etc. spawn helper processes for audio that don't register
+/// as NSRunningApplication — but their parent (the main browser) does.
+#[cfg(target_os = "macos")]
+fn resolve_parent_app(child_pid: i32) -> Option<AudioAppInfo> {
+    use sysinfo::{Pid, System, ProcessesToUpdate};
+
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+
+    let mut current_pid = Some(Pid::from_u32(child_pid as u32));
+
+    // Walk up to 10 levels (Chrome helpers can be nested)
+    for _ in 0..10 {
+        let pid = current_pid?;
+        let proc = sys.process(pid)?;
+
+        // Try to look up this PID as an NSRunningApplication
+        if let Some(running_app) = cidre::ns::RunningApp::with_pid(pid.as_u32() as i32) {
+            let display_name = running_app
+                .localized_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| proc.name().to_string_lossy().to_string());
+            let bundle_id = running_app
+                .bundle_id()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("pid.{}", pid.as_u32()));
+
+            // Skip launchd (pid 1) and other system processes
+            if bundle_id.starts_with("com.apple.") && display_name == "launchd" {
+                return None;
+            }
+
+            return Some(AudioAppInfo {
+                bundle_id,
+                display_name,
+                pid: pid.as_u32() as i32,
+            });
+        }
+
+        current_pid = proc.parent();
+    }
+
+    None
 }
 
 // Stub implementation for non-macOS platforms

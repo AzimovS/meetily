@@ -33,6 +33,7 @@ pub mod async_logger;
 pub mod batch_processor;
 pub mod system_detector;
 pub mod system_audio_commands;
+pub mod meeting_detection;
 pub mod device_monitor;  // NEW: Device disconnect/reconnect monitoring
 pub mod playback_monitor; // NEW: Playback device detection for BT warnings
 

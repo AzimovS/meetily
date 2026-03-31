@@ -47,6 +47,8 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
                 let _ = window.eval("window.location.assign('/settings')");
             }
         }
+        "start_detected_recording" => start_detected_recording_handler(app),
+        "toggle_detection" => toggle_detection_handler(app),
         "check_updates" => check_updates_handler(app),
         "quit" => app.exit(0),
         _ => {}
@@ -200,6 +202,42 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
+fn start_detected_recording_handler<R: Runtime>(app: &AppHandle<R>) {
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::audio::meeting_detection::commands::start_detected_recording(&app_clone).await;
+    });
+}
+
+fn toggle_detection_handler<R: Runtime>(app: &AppHandle<R>) {
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri::Manager;
+        let state = app_clone.state::<crate::audio::meeting_detection::commands::MeetingDetectionManagedState>();
+        let is_enabled = {
+            let guard = state.lock().await;
+            guard.handle.is_some()
+        };
+
+        if is_enabled {
+            let _ = crate::audio::meeting_detection::commands::disable_meeting_detection(
+                app_clone.clone(),
+                app_clone.state::<crate::audio::meeting_detection::commands::MeetingDetectionManagedState>(),
+            )
+            .await;
+        } else {
+            let _ = crate::audio::meeting_detection::commands::enable_meeting_detection(
+                app_clone.clone(),
+                app_clone.state::<crate::audio::meeting_detection::commands::MeetingDetectionManagedState>(),
+            )
+            .await;
+        }
+
+        // Rebuild tray menu to reflect new state
+        update_tray_menu(&app_clone);
+    });
+}
+
 fn check_updates_handler<R: Runtime>(app: &AppHandle<R>) {
     focus_main_window(app);
     if let Some(window) = app.get_webview_window("main") {
@@ -330,6 +368,26 @@ fn build_menu<R: Runtime>(
     } else {
         match state {
             RecordingState::Stopped => {
+                // If a meeting was detected, show a prominent "Start Recording" item for it
+                let detected = {
+                    use tauri::Manager;
+                    app.try_state::<crate::audio::meeting_detection::commands::MeetingDetectionManagedState>()
+                        .and_then(|state| {
+                            state.try_lock().ok().and_then(|g| g.detected_meeting.clone())
+                        })
+                };
+
+                if let Some(meeting) = detected {
+                    let label = if let Some(title) = &meeting.meeting_title {
+                        format!("● Start Recording ({})", title)
+                    } else {
+                        format!("● Start Recording ({})", meeting.app_name)
+                    };
+                    builder = builder
+                        .item(&MenuItemBuilder::with_id("start_detected_recording", &label).build(app)?)
+                        .item(&PredefinedMenuItem::separator(app)?);
+                }
+
                 builder = builder
                     .item(&MenuItemBuilder::with_id("toggle_recording", "Start Recording").build(app)?);
             }
@@ -381,7 +439,23 @@ fn build_menu<R: Runtime>(
         }
     }
 
+    // Meeting detection toggle
+    let detection_label = {
+        use tauri::Manager;
+        let is_enabled = app
+            .try_state::<crate::audio::meeting_detection::commands::MeetingDetectionManagedState>()
+            .and_then(|state| state.try_lock().ok().map(|g| g.handle.is_some()))
+            .unwrap_or(false);
+        if is_enabled {
+            "Meeting Detection: On"
+        } else {
+            "Meeting Detection: Off"
+        }
+    };
+
     builder
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(&MenuItemBuilder::with_id("toggle_detection", detection_label).build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?)
         .item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?)
