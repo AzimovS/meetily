@@ -200,6 +200,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
           setTranscriptModelConfig({
             provider: config.provider || 'parakeet',
             model: config.model || 'parakeet-tdt-0.6b-v3-int8',
+            endpointUrl: config.endpointUrl || null,
             apiKey: config.apiKey || null
           });
         }

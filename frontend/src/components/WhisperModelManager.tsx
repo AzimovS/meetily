@@ -247,6 +247,7 @@ export function ModelManager({
       await invoke('api_save_transcript_config', {
         provider: 'localWhisper',
         model: modelName,
+        endpointUrl: null,
         apiKey: null
       });
     } catch (error) {

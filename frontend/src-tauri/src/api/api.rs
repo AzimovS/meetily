@@ -99,14 +99,44 @@ pub struct GetApiKeyRequest {
 pub struct TranscriptConfig {
     pub provider: String,
     pub model: String,
+    #[serde(rename = "endpointUrl")]
+    pub endpoint_url: Option<String>,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
+}
+
+impl TranscriptConfig {
+    /// Resolve the remote endpoint URL and model name from the config.
+    ///
+    /// Two-phase deployment: `endpoint_url` is the canonical URL location.
+    /// Falls back to `model` for users who upgraded but still have the URL in `model`
+    /// (from before the endpointUrl migration). This fallback can be removed once
+    /// a Phase 2 migration clears `model` for remote rows.
+    /// See: migrations/20260330000000_add_endpoint_url_to_transcript_settings.sql
+    pub fn resolve_remote_params(&self) -> (String, String) {
+        let has_endpoint_url = self.endpoint_url.as_ref()
+            .filter(|u| !u.is_empty())
+            .is_some();
+        let url = self.endpoint_url.clone()
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| self.model.clone());
+        let model_name = if has_endpoint_url {
+            let m = self.model.clone();
+            // Don't send the URL as the model name (migrated data has URL in both columns)
+            if m == url { String::new() } else { m }
+        } else {
+            String::new()
+        };
+        (url, model_name)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SaveTranscriptConfigRequest {
     pub provider: String,
     pub model: String,
+    #[serde(rename = "endpointUrl")]
+    pub endpoint_url: Option<String>,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
 }
@@ -622,6 +652,7 @@ pub async fn api_get_transcript_config<R: Runtime>(
                     Ok(Some(TranscriptConfig {
                         provider: config.provider,
                         model: config.model,
+                        endpoint_url: config.endpoint_url,
                         api_key,
                     }))
                 }
@@ -640,6 +671,7 @@ pub async fn api_get_transcript_config<R: Runtime>(
             Ok(Some(TranscriptConfig {
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
+                endpoint_url: None,
                 api_key: None,
             }))
         }
@@ -656,6 +688,7 @@ pub async fn api_save_transcript_config<R: Runtime>(
     state: tauri::State<'_, AppState>,
     provider: String,
     model: String,
+    endpoint_url: Option<String>,
     api_key: Option<String>,
     _auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
@@ -665,7 +698,14 @@ pub async fn api_save_transcript_config<R: Runtime>(
     );
     let pool = state.db_manager.pool();
 
-    if let Err(e) = SettingsRepository::save_transcript_config(pool, &provider, &model).await {
+    if let Err(e) = SettingsRepository::save_transcript_config(
+        pool,
+        &provider,
+        &model,
+        endpoint_url.as_deref(),
+    )
+    .await
+    {
         log_error!("Failed to save transcript config: {}", e);
         return Err(e.to_string());
     }
