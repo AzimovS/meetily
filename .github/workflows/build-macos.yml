@@ -151,27 +151,34 @@ jobs:
             echo "✓ macOS (Intel) build with CPU-only transcription"
           fi
 
-      - name: Build llama-helper sidecar
+      - name: Build llama-helper sidecar (Apple Silicon only)
+        if: github.event.inputs.target == 'aarch64-apple-darwin'
         run: |
-          TARGET="${{ github.event.inputs.target }}"
-          echo "Building llama-helper sidecar..."
+          echo "Building llama-helper sidecar with Metal support..."
+          cargo build --release -p llama-helper --features metal
 
-          LLAMA_FEATURES=""
-          if [[ "$TARGET" == "aarch64-apple-darwin" ]]; then
-            LLAMA_FEATURES="--features metal"
-            echo "Using Metal GPU acceleration"
-          else
-            echo "Using CPU-only mode (Intel)"
-          fi
-
-          cargo build --release -p llama-helper $LLAMA_FEATURES
-
-          # Copy binary to binaries directory
           mkdir -p frontend/src-tauri/binaries
-          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-${TARGET}
+          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-aarch64-apple-darwin
 
           echo "Copied llama-helper to frontend/src-tauri/binaries/"
           ls -la frontend/src-tauri/binaries/
+
+      - name: Remove externalBin for Intel builds (sidecar not needed)
+        if: github.event.inputs.target == 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          echo "Removing externalBin from tauri.conf.json (llama-helper not needed for Intel)"
+          cd frontend/src-tauri
+          python3 -c "
+          import json
+          with open('tauri.conf.json', 'r') as f:
+              config = json.load(f)
+          if 'externalBin' in config.get('bundle', {}):
+              del config['bundle']['externalBin']
+              print('Removed externalBin from bundle config')
+          with open('tauri.conf.json', 'w') as f:
+              json.dump(config, f, indent=4)
+          "
 
       - name: Cache FFmpeg binary
         uses: actions/cache@v4
