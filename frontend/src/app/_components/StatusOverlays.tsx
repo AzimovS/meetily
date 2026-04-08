@@ -3,6 +3,9 @@ interface StatusOverlaysProps {
   isProcessing: boolean;      // Processing transcription after recording stops
   isSaving: boolean;          // Saving transcript to database
 
+  // Dynamic message from shutdown progress events
+  processingMessage?: string;
+
   // Layout
   sidebarCollapsed: boolean;  // For responsive margin calculation
 }
@@ -40,6 +43,7 @@ function StatusOverlay({ show, message, sidebarCollapsed }: StatusOverlayProps) 
 export function StatusOverlays({
   isProcessing,
   isSaving,
+  processingMessage,
   sidebarCollapsed
 }: StatusOverlaysProps) {
   return (
@@ -47,7 +51,7 @@ export function StatusOverlays({
       {/* Processing status overlay - shown after recording stops while finalizing transcription */}
       <StatusOverlay
         show={isProcessing}
-        message="Finalizing transcription..."
+        message={processingMessage || "Finalizing transcription..."}
         sidebarCollapsed={sidebarCollapsed}
       />
 

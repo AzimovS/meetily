@@ -10,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { toast } from 'sonner';
 
 interface RecordingControlsProps {
   isRecording: boolean;
@@ -330,6 +331,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       });
     };
   }, [onRecordingStop, onTranscriptionError]);
+
+  // No-transcript warning: if no speech detected within 15s of recording, warn user
+  useEffect(() => {
+    if (!isRecording || isPaused || speechDetected) return;
+    const timer = setTimeout(() => {
+      toast.warning(
+        'No speech detected. Check your microphone and permissions.',
+        { id: 'no-speech-warning', duration: 10000 }
+      );
+    }, 15000);
+    return () => clearTimeout(timer);
+  }, [isRecording, isPaused, speechDetected]);
 
   return (
     <TooltipProvider>

@@ -110,6 +110,47 @@ export function useRecordingStop(
     };
   }, [router]);
 
+  // Listen for shutdown progress stages from Rust (previously unwired)
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+
+    const setup = async () => {
+      unlistenFn = await listen<{
+        stage: string;
+        message: string;
+        progress: number;
+      }>('recording-shutdown-progress', (event) => {
+        setStatus(RecordingStatus.PROCESSING_TRANSCRIPTS, event.payload.message);
+      });
+    };
+
+    setup();
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, [setStatus]);
+
+  // Listen for chunk loss during shutdown (previously unwired)
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+
+    const setup = async () => {
+      unlistenFn = await listen('transcript-chunk-loss-detected', () => {
+        toast.warning(
+          'Some audio could not be transcribed. The transcript may be incomplete.',
+          { id: 'chunk-loss' }
+        );
+      });
+    };
+
+    setup();
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
+
   // Main recording stop handler
   const handleRecordingStop = useCallback(async (isCallApi: boolean) => {
     if (recordingStoppedDataRef.current) {

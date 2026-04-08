@@ -18,6 +18,9 @@ static SEQUENCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 // Speech detection flag - reset per recording session
 static SPEECH_DETECTED_EMITTED: AtomicBool = AtomicBool::new(false);
 
+// Model-not-loaded error emission flag - emit only once per session to avoid toast spam
+static MODEL_UNLOADED_EMITTED: AtomicBool = AtomicBool::new(false);
+
 // Global echo deduplicator - shared across worker iterations
 static ECHO_DEDUP: std::sync::LazyLock<Mutex<EchoDeduplicator>> =
     std::sync::LazyLock::new(|| Mutex::new(EchoDeduplicator::new()));
@@ -115,6 +118,7 @@ impl EchoDeduplicator {
 /// Reset the speech detected flag for a new recording session
 pub fn reset_speech_detected_flag() {
     SPEECH_DETECTED_EMITTED.store(false, Ordering::SeqCst);
+    MODEL_UNLOADED_EMITTED.store(false, Ordering::SeqCst);
     info!("🔍 SPEECH_DETECTED_EMITTED reset to: {}", SPEECH_DETECTED_EMITTED.load(Ordering::SeqCst));
     // Also reset echo deduplicator
     if let Ok(mut dedup) = ECHO_DEDUP.lock() {
@@ -235,8 +239,16 @@ pub fn start_transcription_task<R: Runtime>(
 
                             // Check if model is still loaded before processing
                             if !engine_clone.is_model_loaded().await {
-                                warn!("⚠️ Worker {}: Model unloaded, but continuing to preserve chunk {}", worker_id, chunk.chunk_id);
-                                // Still count as completed even if we can't process
+                                warn!("⚠️ Worker {}: Model unloaded, skipping chunk {}", worker_id, chunk.chunk_id);
+                                // Emit error ONCE per session so user knows transcription is broken
+                                if !MODEL_UNLOADED_EMITTED.swap(true, Ordering::SeqCst) {
+                                    error!("❌ Worker {}: Model not loaded - emitting user-visible error", worker_id);
+                                    let _ = app_clone.emit("transcription-error", serde_json::json!({
+                                        "error": "Transcription model not loaded",
+                                        "userMessage": "Speech recognition model failed to load. Recording continues but transcription is unavailable. Try restarting the app.",
+                                        "actionable": true
+                                    }));
+                                }
                                 chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
                                 continue;
                             }
