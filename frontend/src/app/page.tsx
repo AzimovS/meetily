@@ -251,6 +251,7 @@ export default function Home() {
         <StatusOverlays
           isProcessing={status === RecordingStatus.PROCESSING_TRANSCRIPTS && !recordingState.isRecording}
           isSaving={status === RecordingStatus.SAVING}
+          processingMessage={recordingState.statusMessage}
           sidebarCollapsed={sidebarCollapsed}
         />
       </div>

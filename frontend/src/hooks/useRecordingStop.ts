@@ -62,6 +62,10 @@ export function useRecordingStop(
 
   const router = useRouter();
 
+  // Track current status via ref so event listeners always see latest value without stale closures
+  const statusRef = useRef(status);
+  useEffect(() => { statusRef.current = status; }, [status]);
+
   // Guard to prevent duplicate/concurrent stop calls (e.g., from UI and tray simultaneously)
   const stopInProgressRef = useRef(false);
 
@@ -109,6 +113,37 @@ export function useRecordingStop(
       }
     };
   }, [router]);
+
+  // Listen for shutdown events from Rust (previously unwired)
+  useEffect(() => {
+    const unlisteners: (() => void)[] = [];
+
+    const setup = async () => {
+      unlisteners.push(await listen<{
+        stage: string;
+        message: string;
+        progress: number;
+      }>('recording-shutdown-progress', (event) => {
+        // Only update while still in STOPPING or PROCESSING to prevent status regression
+        // (late events from slow model unloading could arrive after frontend moves to SAVING)
+        const current = statusRef.current;
+        if (current === RecordingStatus.STOPPING || current === RecordingStatus.PROCESSING_TRANSCRIPTS) {
+          setStatus(RecordingStatus.PROCESSING_TRANSCRIPTS, event.payload.message);
+        }
+      }));
+
+      unlisteners.push(await listen('transcript-chunk-loss-detected', () => {
+        toast.warning(
+          'Some audio could not be transcribed. The transcript may be incomplete.',
+          { id: 'chunk-loss' }
+        );
+      }));
+    };
+
+    setup();
+
+    return () => unlisteners.forEach(fn => fn());
+  }, [setStatus]);
 
   // Main recording stop handler
   const handleRecordingStop = useCallback(async (isCallApi: boolean) => {
