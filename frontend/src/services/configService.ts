@@ -112,6 +112,7 @@ export class ConfigService {
       model,
     });
   }
+
 }
 
 // Export singleton instance
