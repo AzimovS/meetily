@@ -113,24 +113,6 @@ export class ConfigService {
     });
   }
 
-  /**
-   * Test remote transcription connection
-   * @param endpoint - Transcription API endpoint URL
-   * @param apiKey - Optional API key
-   * @param model - Model name
-   * @returns Promise with test result
-   */
-  async testRemoteTranscriptionConnection(
-    endpoint: string,
-    apiKey: string | null,
-    model: string
-  ): Promise<{ status: string; message: string; http_status?: number }> {
-    return invoke<{ status: string; message: string; http_status?: number }>('api_test_remote_transcription_connection', {
-      endpoint,
-      apiKey,
-      model,
-    });
-  }
 }
 
 // Export singleton instance
