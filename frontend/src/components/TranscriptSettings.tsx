@@ -8,6 +8,7 @@ import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { RefreshCw, CheckCircle2 } from 'lucide-react';
 
 
 export interface TranscriptModelProps {
@@ -33,6 +34,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     const [uiApiKey, setUiApiKey] = useState<string | null>(transcriptModelConfig.apiKey || null);
     const [apiKeyDirty, setApiKeyDirty] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isTestingConnection, setIsTestingConnection] = useState(false);
 
     // Sync local draft state when the context config updates (e.g., async load on mount)
     useEffect(() => {
@@ -91,6 +93,31 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
             toast.error('Failed to save transcription settings');
         } finally {
             setIsSaving(false);
+        }
+    };
+
+    const testRemoteConnection = async () => {
+        if (!uiEndpointUrl.trim() || !uiModel.trim()) {
+            toast.error('Please enter endpoint URL and model name first');
+            return;
+        }
+
+        setIsTestingConnection(true);
+        try {
+            const result = await invoke<{ status: string; message: string }>(
+                'api_test_remote_transcription_connection',
+                {
+                    endpoint: uiEndpointUrl.trim(),
+                    apiKey: uiApiKey?.trim() || null,
+                    model: uiModel.trim(),
+                }
+            );
+            toast.success(result.message || 'Connection successful!');
+        } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            toast.error(errorMsg);
+        } finally {
+            setIsTestingConnection(false);
         }
     };
 
@@ -219,6 +246,29 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                             className="mt-1"
                         />
                     </div>
+                )}
+
+                {uiProvider === 'remote' && (
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={testRemoteConnection}
+                        disabled={isTestingConnection || !uiEndpointUrl.trim() || !uiModel.trim()}
+                        className="w-full"
+                    >
+                        {isTestingConnection ? (
+                            <>
+                                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                Testing Connection...
+                            </>
+                        ) : (
+                            <>
+                                <CheckCircle2 className="mr-2 h-4 w-4" />
+                                Test Connection
+                            </>
+                        )}
+                    </Button>
                 )}
 
                 {isRemoteProvider && (

@@ -1426,3 +1426,149 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
         }
     }
 }
+
+#[tauri::command]
+pub async fn api_test_remote_transcription_connection<R: Runtime>(
+    _app: AppHandle<R>,
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+) -> Result<serde_json::Value, String> {
+    log_info!(
+        "api_test_remote_transcription_connection called: endpoint='{}', model='{}'",
+        &endpoint,
+        &model
+    );
+
+    // Validate endpoint URL format
+    if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+        return Err("Endpoint must start with http:// or https://".to_string());
+    }
+
+    // Require HTTPS for non-localhost (matching RemoteProvider::new validation)
+    if let Ok(parsed) = url::Url::parse(&endpoint) {
+        let is_localhost = parsed
+            .host_str()
+            .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
+            .unwrap_or(false);
+        if parsed.scheme() != "https" && !is_localhost {
+            return Err(format!(
+                "Endpoint must use HTTPS (got '{}://'). HTTP is only allowed for localhost.",
+                parsed.scheme()
+            ));
+        }
+    }
+
+    // Generate a tiny silent WAV: 0.5s at 16kHz mono 16-bit PCM
+    let num_samples: usize = 8000;
+    let data_size = num_samples * 2;
+    let file_size = 36 + data_size;
+    let mut wav = Vec::with_capacity(44 + data_size);
+
+    // RIFF header
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(file_size as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+
+    // fmt chunk
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&16000u32.to_le_bytes()); // sample rate
+    wav.extend_from_slice(&32000u32.to_le_bytes()); // byte rate
+    wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+
+    // data chunk
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data_size as u32).to_le_bytes());
+    wav.extend_from_slice(&vec![0u8; data_size]); // silence
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let file_part = reqwest::multipart::Part::bytes(wav)
+        .file_name("test.wav")
+        .mime_str("audio/wav")
+        .map_err(|e| format!("Failed to build multipart: {}", e))?;
+
+    let mut form = reqwest::multipart::Form::new().part("file", file_part);
+    if !model.trim().is_empty() {
+        form = form.text("model", model);
+    }
+
+    let mut request = client.post(&endpoint).multipart(form);
+
+    if let Some(key) = api_key.filter(|k| !k.trim().is_empty()) {
+        request = request.header("Authorization", format!("Bearer {}", key));
+    }
+
+    match request.send().await {
+        Ok(response) => {
+            let status = response.status();
+            let response_text = response.text().await.unwrap_or_default();
+
+            if status.is_success() {
+                match serde_json::from_str::<serde_json::Value>(&response_text) {
+                    Ok(json) => {
+                        if json.get("text").is_some() {
+                            log_info!(
+                                "✅ Remote transcription connection test successful - endpoint validated"
+                            );
+                            Ok(serde_json::json!({
+                                "status": "success",
+                                "message": "Connection successful — endpoint accepted audio and returned a valid response",
+                                "http_status": status.as_u16()
+                            }))
+                        } else {
+                            log_warn!("⚠️ Endpoint returned 200 but response is missing 'text' field: {}", response_text);
+                            Err("Endpoint returned 200 but response is missing 'text' field. Expected OpenAI-compatible transcription format.".to_string())
+                        }
+                    }
+                    Err(e) => {
+                        log_warn!("⚠️ Endpoint returned 200 but response is not valid JSON: {}", e);
+                        Err(format!(
+                            "Endpoint returned 200 but response is not valid JSON: {}",
+                            e
+                        ))
+                    }
+                }
+            } else if status.as_u16() == 401 || status.as_u16() == 403 {
+                log_warn!(
+                    "⚠️ Remote transcription connection test auth failure: HTTP {}",
+                    status
+                );
+                Err(format!(
+                    "Authentication failed (HTTP {}). Please check your API key.",
+                    status
+                ))
+            } else {
+                log_warn!(
+                    "⚠️ Remote transcription connection test failed with status {}: {}",
+                    status,
+                    response_text
+                );
+                Err(format!(
+                    "Connection failed with status {}: {}",
+                    status, response_text
+                ))
+            }
+        }
+        Err(e) => {
+            log_error!("❌ Remote transcription connection test failed: {}", e);
+            if e.is_timeout() {
+                Err(
+                    "Connection timed out after 30s. Please check the endpoint URL."
+                        .to_string(),
+                )
+            } else if e.is_connect() {
+                Err("Could not connect to endpoint. Please verify the URL is correct and the server is running.".to_string())
+            } else {
+                Err(format!("Connection failed: {}", e))
+            }
+        }
+    }
+}
