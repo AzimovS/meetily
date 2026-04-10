@@ -373,7 +373,14 @@ pub fn start_transcription_task<R: Runtime>(
                                         }
                                         _ => {
                                             warn!("Worker {}: Transcription failed: {}", worker_id, e);
-                                            let _ = app_clone.emit("transcription-warning", e.to_string());
+                                            // Sanitize: show generic message for EngineFailed to avoid
+                                            // leaking remote endpoint URLs or internal details in toasts
+                                            let user_msg = match &e {
+                                                TranscriptionError::EngineFailed(_) =>
+                                                    "Transcription failed for an audio segment.".to_string(),
+                                                other => other.to_string(),
+                                            };
+                                            let _ = app_clone.emit("transcription-warning", user_msg);
                                         }
                                     }
                                 }
