@@ -51,8 +51,8 @@ impl RemoteProvider {
         };
 
         let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(15))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(40))
             .build()
             .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 

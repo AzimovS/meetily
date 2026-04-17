@@ -1491,7 +1491,7 @@ pub async fn api_test_remote_transcription_connection<R: Runtime>(
     wav.extend_from_slice(&vec![0u8; data_size]); // silence
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(40))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
@@ -1573,7 +1573,7 @@ pub async fn api_test_remote_transcription_connection<R: Runtime>(
             log_error!("❌ Remote transcription connection test failed: {}", e);
             if e.is_timeout() {
                 Err(
-                    "Connection timed out after 30s. Please check the endpoint URL."
+                    "Connection timed out after 40s. Please check the endpoint URL."
                         .to_string(),
                 )
             } else if e.is_connect() {
