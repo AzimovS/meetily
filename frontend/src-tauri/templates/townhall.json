@@ -1,0 +1,16 @@
+{
+  "name": "Town Hall",
+  "description": "A focused template for townhall or all-hands meetings. Captures only the most important leadership updates (grouped by speaker) and key Q&A takeaways.",
+  "sections": [
+    {
+      "title": "Updates from Leadership",
+      "instruction": "Capture the most important points, announcements, and strategic messages from executives and senior leaders. Group by speaker using '### {Speaker Name or Role}' sub-headings, followed by 2-5 concise bullets per speaker covering their key points. Use speaker labels only when the transcript clearly attributes statements; if speakers are unlabeled or attribution is ambiguous, use a single '### Leadership' heading and list bullets without inventing names or titles. Include high-signal items spoken by leaders: strategy, priorities, org decisions, company direction, KPIs, milestones, launches, and commitments. Omit filler, pleasantries, and housekeeping. If there is no clear leadership content in the transcript, omit this section entirely.",
+      "format": "paragraph"
+    },
+    {
+      "title": "Q&A Highlights",
+      "instruction": "List key takeaways from the Q&A portion as flat one-line bullets. Focus on answers that reveal decisions, commitments, or new information -- not on the questions themselves. Do not use 'Q:' / 'A:' prefixes. Prefer concrete facts over vague paraphrases; include short quoted phrases when they capture a commitment or pivot. Do not repeat facts already captured under Updates from Leadership. If there was no Q&A, omit this section entirely.",
+      "format": "list"
+    }
+  ]
+}
