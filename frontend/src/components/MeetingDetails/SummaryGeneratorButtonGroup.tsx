@@ -238,6 +238,9 @@ export function SummaryGeneratorButtonGroup({
 
   const isGenerating = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
 
+  const currentTemplateName =
+    availableTemplates.find((t) => t.id === selectedTemplate)?.name ?? 'Template';
+
   return (
     <ButtonGroup>
       {/* Generate Summary or Stop button */}
@@ -318,10 +321,13 @@ export function SummaryGeneratorButtonGroup({
             <Button
               variant="outline"
               size="sm"
-              title="Select summary template"
+              title={`Summary template: ${currentTemplateName} (click to change)`}
+              aria-label={`Change summary template. Currently selected: ${currentTemplateName}`}
             >
               <FileText />
-              <span className="hidden lg:inline">Template</span>
+              <span className="hidden lg:inline max-w-[160px] truncate">
+                {currentTemplateName}
+              </span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
