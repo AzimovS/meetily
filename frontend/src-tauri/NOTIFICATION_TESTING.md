@@ -1,5 +1,11 @@
 # Testing Notifications on macOS
 
+## UI: Debug Notifications Dropdown
+
+The fastest way to test each notification type is **About → Debug Notifications** in the app. The dropdown exposes every notification type (recording started/stopped/paused/resumed, transcription complete, meeting reminder, system error, generic test) and fires each one through the real production code path.
+
+Because it uses the production path, the dropdown **respects user consent and per-type preferences** in Settings → Preferences → Notifications. If a type is suppressed, the UI shows a `toast.info` explaining why instead of firing silently. To bypass consent entirely during deep troubleshooting, use `test_notification_with_auto_consent` from DevTools (see below).
+
 ## Quick Test Commands
 
 ### 1. Test Notification Immediately
