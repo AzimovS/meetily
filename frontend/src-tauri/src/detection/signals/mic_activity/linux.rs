@@ -150,8 +150,13 @@ fn pulse_worker(shared: Arc<SharedState>, ready: Sender<Result<(), String>>) {
             }
         }
 
-        // Backoff before reconnecting, responsive to shutdown.
-        let sleep_until = Instant::now() + backoff;
+        // Backoff before reconnecting. ±20% jitter to avoid thundering
+        // herd when multiple Meetily instances on the same host (or
+        // many users on a shared workstation) reconnect in lockstep
+        // after a pulseaudio restart.
+        let jitter_pct = rand::Rng::gen_range(&mut rand::thread_rng(), -0.2f32..=0.2f32);
+        let jittered = backoff.as_secs_f32() * (1.0 + jitter_pct);
+        let sleep_until = Instant::now() + Duration::from_secs_f32(jittered.max(0.0));
         while Instant::now() < sleep_until {
             if shared.shutdown.load(Ordering::Acquire) {
                 return;

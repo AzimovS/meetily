@@ -12,7 +12,7 @@
 //! into real audio hardware. The plan's "event-driven" ideal is a
 //! future optimization; polling measured idle CPU is effectively zero.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use cidre::core_audio as ca;
 use log::{debug, trace, warn};
 
@@ -36,8 +36,13 @@ impl MacMicActivitySampler {
 
         let is_running_somewhere = device
             .bool_prop(&ca::PropSelector::DEVICE_IS_RUNNING_SOMEWHERE.global_addr())
-            .context("Failed to read DeviceIsRunningSomewhere")
-            .unwrap_or(false);
+            .unwrap_or_else(|e| {
+                // Property-read errors here are unusual — degrade to
+                // "idle" but leave a breadcrumb so a wedged audio
+                // subsystem doesn't fail silently forever.
+                trace!("DeviceIsRunningSomewhere read failed: {:?}", e);
+                false
+            });
 
         if !is_running_somewhere {
             return Ok(MicSnapshot::default());
