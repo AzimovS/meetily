@@ -80,9 +80,19 @@ impl LinuxMicActivitySampler {
             }
             Err(_) => {
                 shared.shutdown.store(true, Ordering::Release);
-                // Don't join — worker may be stuck in the pulse
-                // mainloop. It sees the shutdown flag and bails next
-                // wake-up; thread leaks but exits cleanly within ~1s.
+                // Give the worker up to 2s to observe the shutdown
+                // flag and exit cleanly. If it doesn't, detach with
+                // a warning — the thread holds a live pulse Context
+                // that will only drop at process exit.
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while !handle.is_finished() && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                if handle.is_finished() {
+                    let _ = handle.join();
+                } else {
+                    warn!("PulseAudio init timed out and worker did not exit within 2s; detaching");
+                }
                 Err(anyhow!("PulseAudio init timed out"))
             }
         }
@@ -278,14 +288,23 @@ fn collect_snapshot(
     own_pid: u32,
 ) {
     let collected = Arc::new(Mutex::new(Vec::<String>::new()));
-    let done = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(1);
 
     let collected_cb = collected.clone();
-    let done_cb = done.clone();
+    // `SyncSender<()>` is Send + Clone. The callback runs on the
+    // pulse mainloop thread; once End/Error fires we signal via
+    // `try_send` (non-blocking — channel size is 1 so a duplicate
+    // send is swallowed).
+    let done_tx_cb = done_tx.clone();
 
+    // Hold the mainloop lock across the full Operation lifecycle:
+    // creation, in-flight callback dispatch, and Drop (which calls
+    // `pa_operation_unref`). Releasing the lock while the Operation
+    // is alive can race with the mainloop's internal state, a
+    // documented pulse-binding UB class.
     mainloop.lock();
     let introspect = context.introspect();
-    let _op = introspect.get_source_output_info_list(move |result| match result {
+    let op = introspect.get_source_output_info_list(move |result| match result {
         ListResult::Item(info) => {
             // Self-filter by PID.
             if let Some(pid_str) = info.proplist.get_str("application.process.id") {
@@ -307,23 +326,29 @@ fn collect_snapshot(
             }
         }
         ListResult::End => {
-            done_cb.store(true, Ordering::Release);
+            let _ = done_tx_cb.try_send(());
         }
         ListResult::Error => {
             warn!("pulse get_source_output_info_list reported Error");
-            done_cb.store(true, Ordering::Release);
+            let _ = done_tx_cb.try_send(());
         }
     });
     mainloop.unlock();
 
-    // Wait for the callback to finish. Cap at 2s — if it really takes
-    // that long, pulseaudio is probably wedged; bail and try next tick.
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !done.load(Ordering::Acquire) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
+    // Wait for the callback to signal completion via the channel.
+    // The mainloop keeps driving callbacks on its own thread; we
+    // just block on the rendezvous rather than poll-sleeping.
+    let completed = done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
 
-    if !done.load(Ordering::Acquire) {
+    // Re-acquire the mainloop lock so the Operation can be dropped
+    // (→ pa_operation_unref) while the lock is held. Even on timeout
+    // this is the safe place to drop — pulse handles unref of an
+    // in-flight op by cancelling it.
+    mainloop.lock();
+    drop(op);
+    mainloop.unlock();
+
+    if !completed {
         trace!("pulse introspect callback did not complete within 2s");
         return;
     }
