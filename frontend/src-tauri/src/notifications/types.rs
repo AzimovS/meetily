@@ -23,6 +23,14 @@ pub enum NotificationType {
     MeetingReminder(u64), // Duration in minutes
     SystemError(String),
     Test, // For testing notifications
+    /// Auto-detected meeting start — a non-Meetily app has held the mic
+    /// past the sustain threshold. Payload is the detected app's display
+    /// name (e.g. "Zoom", "a browser meeting", "a meeting").
+    MeetingDetected(String),
+    /// Auto-detected meeting end — the previously-detected app released
+    /// the mic for the full end-silence window while Meetily was
+    /// recording. Payload is the detected app's display name.
+    MeetingEnded(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,5 +203,29 @@ impl Notification {
         )
         .with_priority(NotificationPriority::Normal)
         .with_timeout(NotificationTimeout::Seconds(5))
+    }
+
+    pub fn meeting_detected(app_name: impl Into<String>) -> Self {
+        let app = app_name.into();
+        let body = if app == "a meeting" || app == "a browser meeting" {
+            format!("Meeting detected — tap to start recording")
+        } else {
+            format!("Meeting detected — {}", app)
+        };
+
+        Notification::new("Meetily", body, NotificationType::MeetingDetected(app))
+            .with_priority(NotificationPriority::High)
+            .with_timeout(NotificationTimeout::Seconds(10))
+    }
+
+    pub fn meeting_ended(app_name: impl Into<String>) -> Self {
+        let app = app_name.into();
+        Notification::new(
+            "Meetily",
+            "Meeting ended — tap to stop recording",
+            NotificationType::MeetingEnded(app),
+        )
+        .with_priority(NotificationPriority::High)
+        .with_timeout(NotificationTimeout::Seconds(10))
     }
 }

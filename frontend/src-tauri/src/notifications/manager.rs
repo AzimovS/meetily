@@ -189,6 +189,28 @@ impl<R: Runtime> NotificationManager<R> {
         self.system_handler.show_notification(notification).await
     }
 
+    /// Show a "Meeting detected" notification (mic-activity detection).
+    pub async fn show_meeting_detected(&self, app_name: String) -> Result<()> {
+        let settings = self.settings.read().await;
+        if !settings.notification_preferences.show_meeting_detected {
+            return Ok(());
+        }
+        drop(settings);
+        let notification = Notification::meeting_detected(app_name);
+        self.show_notification(notification).await
+    }
+
+    /// Show a "Meeting ended" notification (mic-activity detection).
+    pub async fn show_meeting_ended(&self, app_name: String) -> Result<()> {
+        let settings = self.settings.read().await;
+        if !settings.notification_preferences.show_meeting_ended {
+            return Ok(());
+        }
+        drop(settings);
+        let notification = Notification::meeting_ended(app_name);
+        self.show_notification(notification).await
+    }
+
     /// Get current notification settings
     pub async fn get_settings(&self) -> NotificationSettings {
         self.settings.read().await.clone()
@@ -301,6 +323,8 @@ impl<R: Runtime> NotificationManager<R> {
             NotificationType::MeetingReminder(_) => settings.notification_preferences.show_meeting_reminders,
             NotificationType::SystemError(_) => settings.notification_preferences.show_system_errors,
             NotificationType::Test => true, // Always show test notifications
+            NotificationType::MeetingDetected(_) => settings.notification_preferences.show_meeting_detected,
+            NotificationType::MeetingEnded(_) => settings.notification_preferences.show_meeting_ended,
         }
     }
 

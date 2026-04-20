@@ -102,6 +102,7 @@ pub mod audio;
 pub mod config;
 pub mod console_utils;
 pub mod database;
+pub mod detection;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -494,6 +495,17 @@ pub fn run() {
                     }
                 }
             });
+
+            // Spawn meeting auto-detection (mic-activity) task.
+            // Gates MeetingEnded on the recording manager's actual flag
+            // (`IS_RECORDING`), not on `RECORDING_FLAG` — the latter is
+            // only set by the legacy `start_recording` path, while the
+            // UI uses `start_recording_with_devices_and_meeting`.
+            let detection_service = detection::spawn(
+                _app.handle().clone(),
+                audio::recording_commands::is_recording_sync,
+            );
+            _app.manage(detection_service);
 
             // Set models directory to use app_data_dir (unified storage location)
             whisper_engine::commands::set_models_directory(&_app.handle());

@@ -794,6 +794,12 @@ pub async fn is_recording() -> bool {
     IS_RECORDING.load(Ordering::SeqCst)
 }
 
+/// Sync form of `is_recording` for callers that aren't async — same
+/// atomic flag as the async version. Meeting-detection polls this.
+pub fn is_recording_sync() -> bool {
+    IS_RECORDING.load(Ordering::SeqCst)
+}
+
 /// Get recording statistics
 pub async fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
