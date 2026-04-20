@@ -5,9 +5,10 @@ use crate::notifications::{
 };
 
 use anyhow::Result;
-use log::{info as log_info, error as log_error};
+use log::{info as log_info, error as log_error, warn as log_warn};
 use serde::{Deserialize, Serialize};
 use tauri::{State, AppHandle, Runtime, Wry};
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_notification::NotificationExt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -384,7 +385,7 @@ pub async fn show_recording_started_notification<R: Runtime>(
             Err(e) => {
                 log_error!("Failed to initialize notification manager: {}", e);
 
-                // Check settings before showing fallback notification
+                // Check settings before attempting fallback.
                 use crate::notifications::settings::ConsentManager;
                 let consent_manager = ConsentManager::new(app_handle.clone())?;
                 let settings = consent_manager.load_settings().await.unwrap_or_default();
@@ -394,27 +395,43 @@ pub async fn show_recording_started_notification<R: Runtime>(
                     return Ok(());
                 }
 
-                // Fallback: Use Tauri's notification API directly
-                let title = "Meetily";
-                let body = match meeting_name {
-                    Some(name) => format!("Recording started for meeting: {}", name),
-                    None => "Recording has started. Please inform others in the meeting that you are recording.".to_string(),
-                };
-
-                log_info!("Using direct Tauri notification fallback: {} - {}", title, body);
-
-                match app_handle.notification().builder()
-                    .title(title)
-                    .body(body)
-                    .show()
+                // On macOS we intentionally do NOT fall back to the `tauri-plugin-notification`
+                // builder: it routes through the deprecated `NSUserNotification` path, whose
+                // banners do not deliver on modern macOS and which could race with our
+                // UNUserNotificationCenterDelegate (last-writer-wins `setDelegate:`). See
+                // docs/solutions/build-errors/macos-dev-build-notifications-and-signing.md.
+                #[cfg(target_os = "macos")]
                 {
-                    Ok(_) => {
-                        log_info!("Successfully showed fallback notification: {}", title);
-                        Ok(())
-                    }
-                    Err(e) => {
-                        log_error!("Failed to show fallback notification: {}", e);
-                        Err(anyhow::anyhow!("Failed to show notification: {}", e))
+                    log_warn!(
+                        "Manager init failed on macOS; skipping deprecated NS fallback. \
+                         Notification dropped: recording_started"
+                    );
+                    Ok(())
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let title = "Meetily";
+                    let body = match meeting_name {
+                        Some(name) => format!("Recording started for meeting: {}", name),
+                        None => "Recording has started. Please inform others in the meeting that you are recording.".to_string(),
+                    };
+
+                    log_info!("Using direct Tauri notification fallback: {} - {}", title, body);
+
+                    match app_handle.notification().builder()
+                        .title(title)
+                        .body(body)
+                        .show()
+                    {
+                        Ok(_) => {
+                            log_info!("Successfully showed fallback notification: {}", title);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            log_error!("Failed to show fallback notification: {}", e);
+                            Err(anyhow::anyhow!("Failed to show notification: {}", e))
+                        }
                     }
                 }
             }
@@ -444,24 +461,36 @@ pub async fn show_recording_stopped_notification<R: Runtime>(
             return Ok(());
         }
 
-        // Use direct Tauri notification as fallback for stop notification
-        let title = "Meetily";
-        let body = "Recording has stopped";
-
-        log_info!("Using direct Tauri notification fallback: {} - {}", title, body);
-
-        match app_handle.notification().builder()
-            .title(title)
-            .body(body)
-            .show()
+        // On macOS: same reasoning as show_recording_started_notification above.
+        #[cfg(target_os = "macos")]
         {
-            Ok(_) => {
-                log_info!("Successfully showed fallback notification: {}", title);
-                Ok(())
-            }
-            Err(e) => {
-                log_error!("Failed to show fallback notification: {}", e);
-                Err(anyhow::anyhow!("Failed to show notification: {}", e))
+            log_warn!(
+                "Manager uninitialized on macOS; skipping deprecated NS fallback. \
+                 Notification dropped: recording_stopped"
+            );
+            Ok(())
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let title = "Meetily";
+            let body = "Recording has stopped";
+
+            log_info!("Using direct Tauri notification fallback: {} - {}", title, body);
+
+            match app_handle.notification().builder()
+                .title(title)
+                .body(body)
+                .show()
+            {
+                Ok(_) => {
+                    log_info!("Successfully showed fallback notification: {}", title);
+                    Ok(())
+                }
+                Err(e) => {
+                    log_error!("Failed to show fallback notification: {}", e);
+                    Err(anyhow::anyhow!("Failed to show notification: {}", e))
+                }
             }
         }
     }
