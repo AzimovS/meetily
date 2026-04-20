@@ -163,6 +163,13 @@ time = { version = "0.3", features = ["formatting"] }
 reqwest = { version = "0.11", features = ["multipart", "json"] }
 core-graphics = "0.23"
 cidre = { git = "https://github.com/yury/cidre", rev = "a9587fa", features = ["av"] }
+
+# UNUserNotificationCenter (modern replacement for deprecated NSUserNotification).
+# See docs/plans/2026-04-20-fix-macos-notification-banner-delivery-plan.md.
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-user-notifications = "0.3"
+block2 = "0.6"
 dasp = "0.11.0"
 futures-channel = "0.3.31"
 
