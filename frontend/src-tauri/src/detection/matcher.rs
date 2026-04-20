@@ -241,6 +241,14 @@ pub fn is_known(bundle_id: &str) -> bool {
     lookup(bundle_id).is_some()
 }
 
+/// Priority rank. Known apps return their `App::priority()` (0..=6),
+/// unknown apps return `u16::MAX`. Lower rank = higher priority.
+pub fn priority_of(bundle_id: &str) -> u16 {
+    lookup(bundle_id)
+        .map(|app| app.priority() as u16)
+        .unwrap_or(u16::MAX)
+}
+
 /// Human-friendly name for the banner. Unknown apps get the generic label.
 pub fn display_name(bundle_id: &str) -> &'static str {
     lookup(bundle_id)

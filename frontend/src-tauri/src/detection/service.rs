@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use log::{error, info, warn};
-use tauri::{AppHandle, Manager, Runtime};
+use log::{debug, error, info, warn};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::Mutex;
 
 use crate::detection::signals::mic_activity;
@@ -24,37 +24,78 @@ use crate::notifications::commands::{
     NotificationManagerState,
 };
 
-/// Poll interval. Small enough that 30s thresholds feel snappy;
-/// large enough that we don't burn CPU when idle.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Shared handle that lets external callers query/influence the detector.
-/// Kept in Tauri state so future tap-handler + dismiss commands can
-/// reach in without recreating plumbing.
+/// Handle for the detection task. Registered in Tauri state so future
+/// command handlers can reach in for `dismiss` / `get_state` surfaces.
 pub struct DetectionService {
     state: Arc<Mutex<DetectorState>>,
+    running: Arc<AtomicBool>,
 }
 
 impl DetectionService {
-    pub fn new(config: DetectorConfig) -> Self {
+    fn new(config: DetectorConfig, running: Arc<AtomicBool>) -> Self {
         Self {
             state: Arc::new(Mutex::new(DetectorState::new(config))),
+            running,
         }
+    }
+
+    /// Signals the task loop to exit at its next tick. Used on app
+    /// teardown so the detector stops sampling CoreAudio/WASAPI/pulse
+    /// before the runtime starts dropping state.
+    pub fn shutdown(&self) {
+        self.running.store(false, Ordering::Release);
+        debug!("DetectionService::shutdown signalled");
+    }
+
+    /// Record that Meetily started/stopped recording. Gates the
+    /// MeetingEnded banner inside the state machine.
+    pub fn set_recording(&self, recording: bool) {
+        // Runs from audio commands which are async; we need a blocking
+        // lock here. This is called at most once per start/stop.
+        if let Ok(mut guard) = self.state.try_lock() {
+            guard.set_recording(recording);
+            debug!("DetectionService: set_recording({})", recording);
+        } else {
+            // Fall back: spawn to unblock once the poll loop lock
+            // releases. Still quick — advance() holds the lock briefly.
+            let state = self.state.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut guard = state.lock().await;
+                guard.set_recording(recording);
+                debug!("DetectionService: set_recording({}) (async fallback)", recording);
+            });
+        }
+    }
+
+    /// Dismiss a detected bundle so further MeetingDetected banners
+    /// for it are suppressed for the cooldown window. Exposed via
+    /// Tauri command; also callable from internal code once we add a
+    /// tap-to-dismiss handler.
+    pub async fn dismiss(&self, bundle_id: &str) {
+        let mut guard = self.state.lock().await;
+        guard.dismiss(bundle_id, Instant::now());
+        info!("DetectionService: dismissed");
+    }
+
+    /// Snapshot the detector's current phase for UI / agent queries.
+    pub async fn current_phase(&self) -> crate::detection::state::DetectorPhaseSnapshot {
+        let guard = self.state.lock().await;
+        guard.phase_snapshot(Instant::now())
     }
 }
 
 /// Spawn the detection task. Returns a `DetectionService` handle that
 /// should be registered in Tauri state.
-///
-/// `is_recording` is a cheap function that returns whether recording is
-/// currently active — used to gate the `MeetingEnded` event path.
-pub fn spawn<R, F>(app: AppHandle<R>, is_recording: F) -> DetectionService
+pub fn spawn<R>(app: AppHandle<R>) -> DetectionService
 where
     R: Runtime,
-    F: Fn() -> bool + Send + Sync + 'static,
 {
-    let service = DetectionService::new(DetectorConfig::DEFAULT);
+    let running = Arc::new(AtomicBool::new(true));
+    let service = DetectionService::new(DetectorConfig::DEFAULT, running.clone());
     let state = service.state.clone();
+    let running_for_task = running.clone();
 
     let sampler = match mic_activity::create() {
         Ok(s) => s,
@@ -64,22 +105,17 @@ where
         }
     };
 
-    // Flag flipped when the runtime is shutting down. On macOS tauri
-    // drops app state at teardown, and we want the loop to exit cleanly.
-    let running = Arc::new(AtomicBool::new(true));
-    let running_cloned = running.clone();
-
     info!("Meeting detection: spawning poll task ({}s interval)", POLL_INTERVAL.as_secs());
 
     tauri::async_runtime::spawn(async move {
         let mut ticker = tokio::time::interval(POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        // First tick fires immediately; skip it to avoid hammering CoreAudio
-        // at startup before the rest of the app is up.
+        // First tick fires immediately; skip it to avoid hammering the
+        // platform audio API before the rest of the app is up.
         ticker.tick().await;
 
-        while running_cloned.load(Ordering::Acquire) {
+        while running_for_task.load(Ordering::Acquire) {
             ticker.tick().await;
 
             let snapshot = match sampler.snapshot() {
@@ -92,7 +128,7 @@ where
 
             let event = {
                 let mut guard = state.lock().await;
-                guard.advance(Instant::now(), &snapshot, is_recording())
+                guard.advance(Instant::now(), &snapshot)
             };
 
             let Some(event) = event else { continue };
@@ -100,26 +136,28 @@ where
             let mgr_state = app.state::<NotificationManagerState<R>>();
             match event {
                 DetectionEvent::MeetingDetected(m) => {
-                    info!(
-                        "Meeting detection: DETECTED {} ({})",
-                        m.display_name, m.bundle_id
-                    );
-                    if let Err(e) =
-                        show_meeting_detected_notification(&app, mgr_state.inner(), m.display_name)
-                            .await
-                    {
+                    info!("Meeting detection: DETECTED {}", m.display_name);
+                    debug!("Meeting detection: DETECTED bundle={}", m.bundle_id);
+                    // Emit Tauri event so frontend / agents can observe
+                    // alongside the notification banner.
+                    if let Err(e) = app.emit("meeting-detected", &m) {
+                        debug!("failed to emit meeting-detected event: {}", e);
+                    }
+                    if let Err(e) = show_meeting_detected_notification(
+                        &app, mgr_state.inner(), m.display_name,
+                    ).await {
                         error!("Failed to show meeting-detected notification: {}", e);
                     }
                 }
                 DetectionEvent::MeetingEnded(m) => {
-                    info!(
-                        "Meeting detection: ENDED {} ({})",
-                        m.display_name, m.bundle_id
-                    );
-                    if let Err(e) =
-                        show_meeting_ended_notification(&app, mgr_state.inner(), m.display_name)
-                            .await
-                    {
+                    info!("Meeting detection: ENDED {}", m.display_name);
+                    debug!("Meeting detection: ENDED bundle={}", m.bundle_id);
+                    if let Err(e) = app.emit("meeting-ended", &m) {
+                        debug!("failed to emit meeting-ended event: {}", e);
+                    }
+                    if let Err(e) = show_meeting_ended_notification(
+                        &app, mgr_state.inner(), m.display_name,
+                    ).await {
                         error!("Failed to show meeting-ended notification: {}", e);
                     }
                 }
@@ -128,10 +166,6 @@ where
 
         info!("Meeting detection: poll task exiting");
     });
-
-    // Keep the running flag alive for the lifetime of the process;
-    // dropped only when the detector itself is dropped (never, in practice).
-    std::mem::forget(running);
 
     service
 }

@@ -497,14 +497,10 @@ pub fn run() {
             });
 
             // Spawn meeting auto-detection (mic-activity) task.
-            // Gates MeetingEnded on the recording manager's actual flag
-            // (`IS_RECORDING`), not on `RECORDING_FLAG` — the latter is
-            // only set by the legacy `start_recording` path, while the
-            // UI uses `start_recording_with_devices_and_meeting`.
-            let detection_service = detection::spawn(
-                _app.handle().clone(),
-                audio::recording_commands::is_recording_sync,
-            );
+            // Recording state is pushed in from `audio::recording_commands`
+            // via `DetectionService::set_recording`, so detection stays
+            // decoupled from audio's internal flag implementation.
+            let detection_service = detection::spawn(_app.handle().clone());
             _app.manage(detection_service);
 
             // Set models directory to use app_data_dir (unified storage location)
@@ -724,6 +720,8 @@ pub fn run() {
             notifications::commands::test_notification_with_auto_consent,
             notifications::commands::get_notification_stats,
             notifications::commands::debug_show_notification,
+            detection::commands::dismiss_detected_meeting,
+            detection::commands::get_detection_state,
             // System audio capture commands
             audio::system_audio_commands::start_system_audio_capture_command,
             audio::system_audio_commands::list_system_audio_devices_command,
@@ -771,6 +769,13 @@ pub fn run() {
         .run(|_app_handle, event| {
             if let tauri::RunEvent::Exit = event {
                 log::info!("Application exiting, cleaning up resources...");
+
+                // Signal the detection poll task to exit before tauri
+                // starts dropping AppHandle / state.
+                if let Some(svc) = _app_handle.try_state::<detection::DetectionService>() {
+                    svc.shutdown();
+                }
+
                 tauri::async_runtime::block_on(async {
                     // Clean up database connection and checkpoint WAL
                     if let Some(app_state) = _app_handle.try_state::<state::AppState>() {

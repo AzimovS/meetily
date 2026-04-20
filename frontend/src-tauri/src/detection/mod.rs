@@ -5,6 +5,7 @@
 //! sustain/end-silence thresholds. See
 //! `docs/plans/2026-04-20-feat-detect-meeting-start-and-end-plan.md`.
 
+pub mod commands;
 pub mod matcher;
 pub mod service;
 pub mod signals;
