@@ -26,16 +26,31 @@ use uuid::Uuid;
 use crate::notifications::types::{Notification, NotificationPriority};
 
 define_class!(
-    // SAFETY: NSObject has no subclassing requirements; we add no ivars and no Drop.
+    // SAFETY: `NSObject` is a valid Objective-C superclass with no subclassing constraints
+    // (no required inits, no `dealloc` hooks to preserve). We add no ivars (unit type) and
+    // implement no `Drop`, so objc2's generated `dealloc` forwards cleanly to `[super dealloc]`.
+    // The delegate is retained for app lifetime in `DELEGATE_CELL`, so `&self` in the methods
+    // below always points at a live instance.
     #[unsafe(super = NSObject)]
     #[ivars = ()]
     struct BannerDelegate;
 
+    // SAFETY: `NSObjectProtocol` requires `-isEqual:`, `-hash`, etc. which NSObject already
+    // provides; we override none of them, so the default implementations are correct.
     unsafe impl NSObjectProtocol for BannerDelegate {}
 
+    // SAFETY: `UNUserNotificationCenterDelegate` is a pure-optional protocol; conforming
+    // without implementing every method is permitted by Apple's API. The one method we do
+    // implement below matches its declared selector and Objective-C signature exactly.
     unsafe impl UNUserNotificationCenterDelegate for BannerDelegate {
-        // The linchpin: tell macOS to present banners even when our app is frontmost.
-        // Without this, foreground-app notifications land in NC silently.
+        // SAFETY: Selector `userNotificationCenter:willPresentNotification:withCompletionHandler:`
+        // matches this Rust fn's argument ABI one-for-one:
+        //   (id, SEL, UNUserNotificationCenter *, UNNotification *,
+        //    void(^)(UNNotificationPresentationOptions))
+        // The `completion_handler` block must be invoked exactly once (Apple's contract) — we
+        // invoke it synchronously below with the presentation options that tell macOS to show
+        // a top-right banner even when our app is frontmost. Without this, foreground-app
+        // notifications land in Notification Center silently.
         #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
         fn will_present_notification(
             &self,
@@ -54,6 +69,9 @@ define_class!(
 impl BannerDelegate {
     fn new() -> Retained<Self> {
         let this = Self::alloc().set_ivars(());
+        // SAFETY: `NSObject`'s `-init` is infallible and returns an owned `Retained<Self>`.
+        // `alloc().set_ivars(())` has produced a freshly allocated instance with zero ivars,
+        // which is exactly what the objc2 `define_class!` contract expects `init` to receive.
         unsafe { msg_send![super(this), init] }
     }
 }
@@ -86,7 +104,10 @@ pub async fn request_authorization() -> Result<bool> {
 
         let block = RcBlock::new(move |granted: objc2::runtime::Bool, error: *mut NSError| {
             let result = if !error.is_null() {
-                let msg = unsafe { error_message(error) };
+                // SAFETY: `error` originates from UN's completion handler and is either null
+            // (checked above) or points to a valid `NSError` for the duration of this
+            // callback. `error_message` only dereferences when non-null.
+            let msg = unsafe { error_message(error) };
                 log_error!("UN requestAuthorization error: {}", msg);
                 Err(anyhow!("UN requestAuthorization error: {}", msg))
             } else {
@@ -147,7 +168,10 @@ pub async fn show(notification: &Notification) -> Result<()> {
             let result = if error.is_null() {
                 Ok(())
             } else {
-                let msg = unsafe { error_message(error) };
+                // SAFETY: `error` originates from UN's completion handler and is either null
+            // (checked above) or points to a valid `NSError` for the duration of this
+            // callback. `error_message` only dereferences when non-null.
+            let msg = unsafe { error_message(error) };
                 Err(anyhow!("UN addNotificationRequest failed: {}", msg))
             };
             if let Some(tx) = tx_slot.lock().ok().and_then(|mut guard| guard.take()) {
@@ -179,10 +203,20 @@ fn interruption_level(priority: &NotificationPriority) -> UNNotificationInterrup
     }
 }
 
+/// Extract a human-readable string from an `NSError` pointer supplied by an Objective-C
+/// completion handler.
+///
+/// # Safety
+///
+/// If `error` is non-null, it must point to a live `NSError` that remains valid for the
+/// duration of this call. UN framework completion handlers uphold this contract: the
+/// `NSError` is alive for the callback scope. Passing a dangling or uninitialized pointer
+/// is undefined behavior.
 unsafe fn error_message(error: *mut NSError) -> String {
     if error.is_null() {
         return String::from("<null NSError>");
     }
+    // SAFETY: null case handled above; caller upholds that `error` is a live NSError.
     let err: &NSError = unsafe { &*error };
     err.localizedDescription().to_string()
 }
