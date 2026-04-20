@@ -274,7 +274,7 @@ fn run_session(
             return SessionOutcome::Connected;
         }
 
-        collect_snapshot(shared, &mainloop, &context, own_pid);
+        collect_snapshot(shared, &mut mainloop, &context, own_pid);
 
         let sleep_until = Instant::now() + POLL_INTERVAL;
         while Instant::now() < sleep_until {
@@ -288,7 +288,7 @@ fn run_session(
 
 fn collect_snapshot(
     shared: &Arc<SharedState>,
-    mainloop: &Mainloop,
+    mainloop: &mut Mainloop,
     context: &Context,
     own_pid: u32,
 ) {
