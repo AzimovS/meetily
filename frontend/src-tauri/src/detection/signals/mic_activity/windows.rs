@@ -30,8 +30,10 @@ use windows::{
         },
         System::{
             Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED},
-            ProcessStatus::{QueryFullProcessImageNameW, PROCESS_NAME_WIN32},
-            Threading::{GetCurrentProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+            Threading::{
+                GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW,
+                PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+            },
         },
     },
 };
