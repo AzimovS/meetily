@@ -14,14 +14,16 @@
 //! the `Send + Sync` bound on `SignalSampler` plus COM's `!Send`
 //! semantics make caching the enumerator more trouble than it's worth.
 
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
 use log::{debug, trace, warn};
 use windows::{
     core::{Interface, PWSTR},
     Win32::{
-        Foundation::{CloseHandle, HANDLE, RPC_E_CHANGED_MODE},
+        Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, RPC_E_CHANGED_MODE},
         Media::Audio::{
             eCapture, eConsole, AudioSessionStateActive, IAudioSessionControl2,
             IAudioSessionManager2, IMMDeviceEnumerator, MMDeviceEnumerator,
@@ -64,6 +66,11 @@ fn ensure_com() {
 
 pub struct WindowsMicActivitySampler {
     own_pid: u32,
+    /// PIDs for which OpenProcess has already been denied. Used to
+    /// warn once-per-PID rather than spamming logs every tick. Typical
+    /// cause: EDR software (Defender for Endpoint, CrowdStrike) blocks
+    /// cross-process queries for its protected processes.
+    warned_denied_pids: Mutex<HashSet<u32>>,
 }
 
 impl WindowsMicActivitySampler {
@@ -83,7 +90,10 @@ impl WindowsMicActivitySampler {
                 .map_err(|e| anyhow!("No default capture endpoint: {:?}", e))?;
         }
 
-        Ok(Self { own_pid })
+        Ok(Self {
+            own_pid,
+            warned_denied_pids: Mutex::new(HashSet::new()),
+        })
     }
 
     fn snapshot_inner(&self) -> Result<MicSnapshot> {
@@ -149,7 +159,7 @@ impl WindowsMicActivitySampler {
                     continue;
                 }
 
-                match process_exe_basename(pid) {
+                match self.process_exe_basename(pid) {
                     Some(name) => active.push(name),
                     None => trace!("couldn't resolve PID {} to exe name", pid),
                 }
@@ -167,16 +177,41 @@ impl WindowsMicActivitySampler {
     }
 }
 
-fn process_exe_basename(pid: u32) -> Option<String> {
-    // SAFETY: OpenProcess / QueryFullProcessImageNameW / CloseHandle
-    // form a standard Win32 pattern. We use PROCESS_QUERY_LIMITED_INFORMATION
-    // which is the least-privileged access that still lets us read the
-    // image path, minimising AV false positives.
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let result = query_image_basename(handle);
-        let _ = CloseHandle(handle);
-        result
+impl WindowsMicActivitySampler {
+    fn process_exe_basename(&self, pid: u32) -> Option<String> {
+        // SAFETY: OpenProcess / QueryFullProcessImageNameW / CloseHandle
+        // form a standard Win32 pattern. We use PROCESS_QUERY_LIMITED_INFORMATION
+        // which is the least-privileged access that still lets us read the
+        // image path, minimising AV false positives.
+        unsafe {
+            match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                Ok(handle) => {
+                    let result = query_image_basename(handle);
+                    let _ = CloseHandle(handle);
+                    result
+                }
+                Err(e) => {
+                    if e.code() == ERROR_ACCESS_DENIED.to_hresult() {
+                        // Warn once per PID — EDR-protected processes
+                        // routinely deny even PROCESS_QUERY_LIMITED_INFORMATION.
+                        // Without this breadcrumb the feature appears
+                        // permanently broken to the user.
+                        let mut warned = self.warned_denied_pids.lock().unwrap();
+                        if warned.insert(pid) {
+                            warn!(
+                                "OpenProcess denied for pid {} (likely EDR-protected); \
+                                 {} unique PIDs seen so far",
+                                pid,
+                                warned.len()
+                            );
+                        }
+                    } else {
+                        trace!("OpenProcess({}) failed: {:?}", pid, e);
+                    }
+                    None
+                }
+            }
+        }
     }
 }
 

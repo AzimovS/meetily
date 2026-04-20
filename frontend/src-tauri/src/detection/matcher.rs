@@ -136,8 +136,11 @@ const ALIASES: &[(&str, App)] = &[];
 
 #[cfg(target_os = "macos")]
 const DEFINITELY_NOT_MEETINGS: &[&str] = &[
-    // Self
+    // Self. Must stay in sync with `identifier` in tauri.conf.json.
+    // If you fork and change the bundle ID, add your variant here.
     "com.meetily.ai",
+    "com.meetily.ai.dev",
+    "com.meetily.ai.debug",
     // System dictation / voice memos
     "com.apple.VoiceMemos",
     "com.apple.dictation",
@@ -161,6 +164,10 @@ const DEFINITELY_NOT_MEETINGS: &[&str] = &[
     // Self (tauri dev / prod builds)
     "meetily.exe",
     "Meetily.exe",
+    // Bundled sidecars — any executable we ship that might open audio.
+    // If the set in `tauri.conf.json` externalBin changes, update here.
+    "llama-helper.exe",
+    "ffmpeg.exe",
     // System / built-in
     "WindowsVoiceRecorder.exe",
     "VoiceRecorder.exe",
@@ -184,6 +191,9 @@ const DEFINITELY_NOT_MEETINGS: &[&str] = &[
 const DEFINITELY_NOT_MEETINGS: &[&str] = &[
     // Self
     "meetily",
+    // Bundled sidecars
+    "llama-helper",
+    "ffmpeg",
     // Audio infra (should never register as mic consumers, but defensive)
     "pulseaudio",
     "pipewire",
