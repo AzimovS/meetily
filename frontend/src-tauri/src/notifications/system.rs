@@ -1,12 +1,19 @@
 use crate::notifications::types::{Notification, NotificationPriority, NotificationTimeout};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+#[cfg(not(target_os = "macos"))]
+use anyhow::anyhow;
 use log::{info as log_info, error as log_error};
 use tauri::{AppHandle, Runtime};
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_notification::NotificationExt;
 use std::time::Duration;
 
-/// Cross-platform system notification handler
+/// Cross-platform system notification handler.
+///
+/// On macOS, delegates to `macos_un` (UNUserNotificationCenter) and never touches `app_handle`.
+/// On Windows/Linux, routes through `tauri-plugin-notification`.
 pub struct SystemNotificationHandler<R: Runtime> {
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     app_handle: AppHandle<R>,
 }
 
@@ -17,7 +24,11 @@ impl<R: Runtime> SystemNotificationHandler<R> {
         }
     }
 
-    /// Show a notification using Tauri's notification plugin
+    /// Show a notification.
+    ///
+    /// On macOS, routes through `UNUserNotificationCenter` directly (see `macos_un`) because
+    /// `tauri-plugin-notification` still uses the deprecated `NSUserNotification` API whose
+    /// banner delivery is broken on modern macOS. On other platforms, uses the plugin as before.
     pub async fn show_notification(&self, notification: Notification) -> Result<()> {
         log_info!("Attempting to show notification: {}", notification.title);
 
@@ -27,21 +38,28 @@ impl<R: Runtime> SystemNotificationHandler<R> {
             return Ok(());
         }
 
-        // Use Tauri notification for all platforms
-        log_info!("Showing Tauri notification: {}", notification.title);
+        #[cfg(target_os = "macos")]
+        {
+            return crate::notifications::macos_un::show(&notification).await;
+        }
 
-        let builder = self.app_handle.notification().builder()
-            .title(&notification.title)
-            .body(&notification.body);
+        #[cfg(not(target_os = "macos"))]
+        {
+            log_info!("Showing Tauri notification: {}", notification.title);
 
-        match builder.show() {
-            Ok(_) => {
-                log_info!("Successfully showed Tauri notification: {}", notification.title);
-                Ok(())
-            }
-            Err(e) => {
-                log_error!("Failed to show Tauri notification: {}", e);
-                Err(anyhow!("Failed to show notification: {}", e))
+            let builder = self.app_handle.notification().builder()
+                .title(&notification.title)
+                .body(&notification.body);
+
+            match builder.show() {
+                Ok(_) => {
+                    log_info!("Successfully showed Tauri notification: {}", notification.title);
+                    Ok(())
+                }
+                Err(e) => {
+                    log_error!("Failed to show Tauri notification: {}", e);
+                    Err(anyhow!("Failed to show notification: {}", e))
+                }
             }
         }
     }
@@ -62,14 +80,33 @@ impl<R: Runtime> SystemNotificationHandler<R> {
         false
     }
 
-    /// Request notification permission from the system
+    /// Request notification permission from the system.
+    ///
+    /// On macOS, triggers the real `UNUserNotificationCenter` authorization flow (which prompts
+    /// the user on first call and returns the stored decision thereafter). On other platforms,
+    /// Tauri handles permissions automatically.
     pub async fn request_permission(&self) -> Result<bool> {
         log_info!("Requesting notification permission");
 
-        // On most platforms with Tauri, permissions are handled automatically
-        // We don't need to show a test notification during initialization
-        log_info!("Notification permission granted (automatic for Tauri apps)");
-        Ok(true)
+        #[cfg(target_os = "macos")]
+        {
+            match crate::notifications::macos_un::request_authorization().await {
+                Ok(granted) => {
+                    log_info!("UN authorization result: granted={}", granted);
+                    Ok(granted)
+                }
+                Err(e) => {
+                    log_error!("UN authorization request failed: {}", e);
+                    Err(e)
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            log_info!("Notification permission granted (automatic for Tauri apps)");
+            Ok(true)
+        }
     }
 
     /// Show a test notification to verify the system is working

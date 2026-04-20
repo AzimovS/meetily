@@ -6,6 +6,7 @@ use crate::notifications::{
 
 use anyhow::Result;
 use log::{info as log_info, error as log_error};
+use serde::{Deserialize, Serialize};
 use tauri::{State, AppHandle, Runtime, Wry};
 use tauri_plugin_notification::NotificationExt;
 use std::sync::Arc;
@@ -13,6 +14,20 @@ use tokio::sync::RwLock;
 
 /// Shared notification manager state
 pub type NotificationManagerState<R> = Arc<RwLock<Option<NotificationManager<R>>>>;
+
+/// Identifier for the kind of notification the debug dropdown can fire.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DebugNotificationKind {
+    RecordingStarted,
+    RecordingStopped,
+    RecordingPaused,
+    RecordingResumed,
+    TranscriptionComplete,
+    MeetingReminder,
+    SystemError,
+    Test,
+}
 
 /// Initialize the notification manager (called during app setup)
 pub async fn initialize_notification_manager<R: Runtime>(
@@ -279,6 +294,54 @@ pub async fn get_notification_stats(
     }
 }
 
+/// Fire a notification of the given `kind` with placeholder data through the real production code path.
+#[tauri::command]
+pub async fn debug_show_notification(
+    app: AppHandle<Wry>,
+    kind: DebugNotificationKind,
+    manager_state: State<'_, NotificationManagerState<Wry>>,
+) -> Result<(), String> {
+    log_info!("Debug: firing {:?} notification", kind);
+
+    let fake_meeting = "Debug Meeting".to_string();
+    let fake_path = "/tmp/meetily-debug/transcript.txt".to_string();
+    let fake_error = "This is a debug system-error notification".to_string();
+    let fake_minutes: u64 = 5;
+
+    let result: Result<()> = match kind {
+        DebugNotificationKind::RecordingStarted => {
+            show_recording_started_notification(&app, manager_state.inner(), Some(fake_meeting)).await
+        }
+        DebugNotificationKind::RecordingStopped => {
+            show_recording_stopped_notification(&app, manager_state.inner()).await
+        }
+        DebugNotificationKind::RecordingPaused => {
+            show_recording_paused_notification(manager_state.inner()).await
+        }
+        DebugNotificationKind::RecordingResumed => {
+            show_recording_resumed_notification(manager_state.inner()).await
+        }
+        DebugNotificationKind::TranscriptionComplete => {
+            show_transcription_complete_notification(manager_state.inner(), Some(fake_path)).await
+        }
+        DebugNotificationKind::MeetingReminder => {
+            show_meeting_reminder_notification(manager_state.inner(), fake_minutes, Some(fake_meeting)).await
+        }
+        DebugNotificationKind::SystemError => {
+            show_system_error_notification(manager_state.inner(), fake_error).await
+        }
+        DebugNotificationKind::Test => {
+            let manager_lock = manager_state.read().await;
+            match manager_lock.as_ref() {
+                Some(m) => m.show_test_notification().await,
+                None => Err(anyhow::anyhow!("Notification manager not initialized")),
+            }
+        }
+    };
+
+    result.map_err(|e| format!("Failed to show debug notification: {}", e))
+}
+
 // Helper functions for showing specific notification types
 // These are used internally by the app and don't need to be Tauri commands
 
@@ -454,6 +517,21 @@ pub async fn show_system_error_notification(
         manager.show_system_error(error).await
     } else {
         log_error!("Cannot show system error notification: manager not initialized");
+        Ok(())
+    }
+}
+
+/// Show meeting reminder notification (internal use)
+pub async fn show_meeting_reminder_notification(
+    manager_state: &NotificationManagerState<Wry>,
+    minutes_until: u64,
+    meeting_title: Option<String>,
+) -> Result<()> {
+    let manager_lock = manager_state.read().await;
+    if let Some(manager) = manager_lock.as_ref() {
+        manager.show_meeting_reminder(minutes_until, meeting_title).await
+    } else {
+        log_error!("Cannot show meeting reminder notification: manager not initialized");
         Ok(())
     }
 }

@@ -5,8 +5,40 @@ import Image from 'next/image';
 import { UpdateDialog } from "./UpdateDialog";
 import { updateService, UpdateInfo } from '@/services/updateService';
 import { Button } from './ui/button';
-import { Loader2, CheckCircle2 } from 'lucide-react';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from './ui/dropdown-menu';
+import { Loader2, CheckCircle2, Bell, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
+
+type DebugNotificationKind =
+    | 'recording_started'
+    | 'recording_stopped'
+    | 'recording_paused'
+    | 'recording_resumed'
+    | 'transcription_complete'
+    | 'meeting_reminder'
+    | 'system_error'
+    | 'test';
+
+// `prefKey` matches a Rust NotificationPreferences field; omitted when a type isn't gated by preference.
+const DEBUG_NOTIFICATION_ITEMS: Array<{
+    kind: DebugNotificationKind;
+    label: string;
+    prefKey?: string;
+}> = [
+    { kind: 'recording_started',      label: 'Recording started',        prefKey: 'show_recording_started' },
+    { kind: 'recording_stopped',      label: 'Recording stopped',        prefKey: 'show_recording_stopped' },
+    { kind: 'recording_paused',       label: 'Recording paused',         prefKey: 'show_recording_paused' },
+    { kind: 'recording_resumed',      label: 'Recording resumed',        prefKey: 'show_recording_resumed' },
+    { kind: 'transcription_complete', label: 'Transcription complete',   prefKey: 'show_transcription_complete' },
+    { kind: 'meeting_reminder',       label: 'Meeting reminder (5 min)', prefKey: 'show_meeting_reminders' },
+    { kind: 'system_error',           label: 'System error',             prefKey: 'show_system_errors' },
+    { kind: 'test',                   label: 'Generic test notification' },
+];
 
 
 export function About() {
@@ -25,6 +57,38 @@ export function About() {
             await invoke('open_external_url', { url: 'https://meetily.zackriya.com/#about' });
         } catch (error) {
             console.error('Failed to open link:', error);
+        }
+    };
+
+    const handleDebugNotification = async (
+        kind: DebugNotificationKind,
+        prefKey?: string,
+    ) => {
+        try {
+            const ready = await invoke<boolean>('is_notification_system_ready');
+            if (!ready) {
+                toast.error('Notification system not ready. Try restarting the app.');
+                return;
+            }
+
+            const settings = await invoke<any>('get_notification_settings');
+            if (settings?.consent_given === false) {
+                toast.info(
+                    'Notifications are disabled in Preferences → Notifications. The OS notification will be suppressed.',
+                );
+            } else if (
+                prefKey &&
+                settings?.notification_preferences?.[prefKey] === false
+            ) {
+                toast.info(
+                    `"${prefKey}" is disabled in Preferences. This notification will be suppressed.`,
+                );
+            }
+
+            await invoke('debug_show_notification', { kind });
+            toast.success(`Fired: ${kind.replace(/_/g, ' ')}`, { duration: 2000 });
+        } catch (e: any) {
+            toast.error('Debug notification failed: ' + (e.message || String(e)));
         }
     };
 
@@ -104,6 +168,25 @@ export function About() {
                     >
                         Debug Updater
                     </Button>
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm" className="text-xs ml-2">
+                                <Bell className="h-3 w-3 mr-1" />
+                                Debug Notifications
+                                <ChevronDown className="h-3 w-3 ml-1" />
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                            {DEBUG_NOTIFICATION_ITEMS.map((item) => (
+                                <DropdownMenuItem
+                                    key={item.kind}
+                                    onClick={() => handleDebugNotification(item.kind, item.prefKey)}
+                                >
+                                    {item.label}
+                                </DropdownMenuItem>
+                            ))}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
                     {updateInfo?.available && (
                         <div className="mt-2 text-xs text-blue-600">
                             Update available: v{updateInfo.version}

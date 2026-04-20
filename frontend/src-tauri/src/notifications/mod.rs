@@ -5,6 +5,9 @@ pub mod settings;
 pub mod commands;
 pub mod manager;
 
+#[cfg(target_os = "macos")]
+pub mod macos_un;
+
 // Re-export main types for easy access
 pub use types::{
     Notification, NotificationType, NotificationPriority, NotificationTimeout
