@@ -8,7 +8,7 @@
 
 use anyhow::{anyhow, Result};
 use block2::RcBlock;
-use log::{error as log_error, info as log_info};
+use log::{error as log_error, info as log_info, warn as log_warn};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, AllocAnyThread};
@@ -24,6 +24,22 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::notifications::types::{Notification, NotificationPriority};
+
+/// Returns true if the current process is running inside a macOS `.app` bundle.
+///
+/// `UNUserNotificationCenter` dereferences `NSBundle.mainBundle` and throws
+/// `NSInternalInconsistencyException: bundleProxyForCurrentProcess is nil` when the executable
+/// was launched directly (e.g. `pnpm run tauri dev`, which runs the raw binary at
+/// `target/debug/meetily` rather than the bundled `.app`). We short-circuit every UN entry
+/// point in that case so dev runs don't crash at startup.
+fn is_running_in_app_bundle() -> bool {
+    static IN_BUNDLE: OnceCell<bool> = OnceCell::new();
+    *IN_BUNDLE.get_or_init(|| {
+        let Ok(path) = std::env::current_exe() else { return false };
+        path.ancestors()
+            .any(|ancestor| ancestor.extension().and_then(|ext| ext.to_str()) == Some("app"))
+    })
+}
 
 define_class!(
     // SAFETY: `NSObject` is a valid Objective-C superclass with no subclassing constraints
@@ -95,6 +111,14 @@ fn install_delegate_if_needed() {
 /// Request notification authorization. Idempotent; if the user has already granted (or denied),
 /// macOS returns the stored decision without re-prompting.
 pub async fn request_authorization() -> Result<bool> {
+    // Report unavailability as `Err` (not `Ok(false)`) so the caller in `manager.rs` falls into
+    // its `Err` arm and does *not* persist `system_permission_granted = false`. A `tauri dev`
+    // run shares its config directory with the bundled `.app` — persisting `false` here would
+    // silently suppress every real notification until the user manually re-granted consent.
+    if !is_running_in_app_bundle() {
+        log_warn!("UN authorization skipped: not running inside a .app bundle (likely `tauri dev`)");
+        return Err(anyhow!("UN unavailable: process is not running inside a .app bundle"));
+    }
     install_delegate_if_needed();
 
     // Scope the ObjC handles (not Send) so they drop before we await.
@@ -133,6 +157,10 @@ pub async fn request_authorization() -> Result<bool> {
 
 /// Present a notification via `UNUserNotificationCenter`.
 pub async fn show(notification: &Notification) -> Result<()> {
+    if !is_running_in_app_bundle() {
+        log_warn!("UN present skipped (no .app bundle): id={:?}", notification.id);
+        return Ok(());
+    }
     install_delegate_if_needed();
 
     let id_str = notification
