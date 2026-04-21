@@ -245,6 +245,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Set recording flag and reset speech detection flag
     info!("🔍 Setting IS_RECORDING to true and resetting SPEECH_DETECTED_EMITTED");
     IS_RECORDING.store(true, Ordering::SeqCst);
+    notify_detection_recording_state(&app, true);
     reset_speech_detected_flag(); // Reset for new recording session
 
     // Start optimized parallel transcription task and store handle
@@ -414,6 +415,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     // Set recording flag and reset speech detection flag
     info!("🔍 Setting IS_RECORDING to true and resetting SPEECH_DETECTED_EMITTED");
     IS_RECORDING.store(true, Ordering::SeqCst);
+    notify_detection_recording_state(&app, true);
     reset_speech_detected_flag(); // Reset for new recording session
 
     // Start optimized parallel transcription task and store handle
@@ -742,6 +744,7 @@ pub async fn stop_recording<R: Runtime>(
     // Set recording flag to false
     info!("🔍 Setting IS_RECORDING to false");
     IS_RECORDING.store(false, Ordering::SeqCst);
+    notify_detection_recording_state(&app, false);
 
     // Step 4.5: Prepare metadata for frontend (NO database save)
     // NOTE: We do NOT save to database here. The frontend will save after all transcripts are displayed.
@@ -792,6 +795,22 @@ pub async fn stop_recording<R: Runtime>(
 /// Check if recording is active
 pub async fn is_recording() -> bool {
     IS_RECORDING.load(Ordering::SeqCst)
+}
+
+/// Sync form of `is_recording` for callers that aren't async — same
+/// atomic flag as the async version.
+pub fn is_recording_sync() -> bool {
+    IS_RECORDING.load(Ordering::SeqCst)
+}
+
+/// Push the current recording state into the detection service so it
+/// can gate MeetingEnded banners on whether the user is actually
+/// recording. No-op if the service isn't registered yet (rare — only
+/// during startup races or disabled-detection builds).
+fn notify_detection_recording_state<R: Runtime>(app: &AppHandle<R>, recording: bool) {
+    if let Some(svc) = app.try_state::<crate::detection::service::DetectionService>() {
+        svc.set_recording(recording);
+    }
 }
 
 /// Get recording statistics
