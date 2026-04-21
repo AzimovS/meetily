@@ -261,13 +261,7 @@ pub fn start_transcription_task<R: Runtime>(
                             };
 
                             // Transcribe with provider-agnostic approach
-                            match transcribe_chunk_with_provider(
-                                &engine_clone,
-                                chunk,
-                                &app_clone,
-                            )
-                            .await
-                            {
+                            match transcribe_chunk_with_provider(&engine_clone, chunk).await {
                                 Ok((transcript, confidence_opt, is_partial)) => {
                                     // Provider-aware confidence threshold
                                     let confidence_threshold = match &engine_clone {
@@ -371,16 +365,43 @@ pub fn start_transcription_task<R: Runtime>(
                                             chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
                                             continue;
                                         }
-                                        _ => {
-                                            warn!("Worker {}: Transcription failed: {}", worker_id, e);
-                                            // Sanitize: show generic message for EngineFailed to avoid
-                                            // leaking remote endpoint URLs or internal details in toasts
-                                            let user_msg = match &e {
-                                                TranscriptionError::EngineFailed(_) =>
-                                                    "Transcription failed for an audio segment.".to_string(),
-                                                other => other.to_string(),
+                                        TranscriptionError::EngineFailed(_)
+                                        | TranscriptionError::UnsupportedLanguage(_) => {
+                                            // Emit an in-transcript placeholder so the failure is
+                                            // visible at its timestamp instead of as a disembodied
+                                            // toast. Skip speech-detected + echo dedup: a placeholder
+                                            // is not spoken content.
+                                            warn!(
+                                                "Worker {}: Transcription failed, emitting placeholder: {}",
+                                                worker_id, e
+                                            );
+
+                                            let sequence_id =
+                                                SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
+                                            let audio_end_time = chunk_timestamp + chunk_duration;
+
+                                            let placeholder = TranscriptUpdate {
+                                                text: "failed chunk".to_string(),
+                                                timestamp: format_current_timestamp(),
+                                                source: "Audio".to_string(),
+                                                sequence_id,
+                                                chunk_start_time: chunk_timestamp,
+                                                is_partial: false,
+                                                confidence: 0.0,
+                                                audio_start_time: chunk_timestamp,
+                                                audio_end_time,
+                                                duration: chunk_duration,
+                                                speaker: speaker.clone(),
                                             };
-                                            let _ = app_clone.emit("transcription-warning", user_msg);
+
+                                            if let Err(emit_err) =
+                                                app_clone.emit("transcript-update", &placeholder)
+                                            {
+                                                error!(
+                                                    "Worker {}: Failed to emit placeholder: {}",
+                                                    worker_id, emit_err
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -534,10 +555,9 @@ pub fn start_transcription_task<R: Runtime>(
 
 /// Transcribe audio chunk using the appropriate provider (Whisper, Parakeet, or trait-based)
 /// Returns: (text, confidence Option, is_partial)
-async fn transcribe_chunk_with_provider<R: Runtime>(
+async fn transcribe_chunk_with_provider(
     engine: &TranscriptionEngine,
     chunk: AudioChunk,
-    app: &AppHandle<R>,
 ) -> std::result::Result<(String, Option<f32>, bool), TranscriptionError> {
     // Convert to 16kHz mono for transcription
     let transcription_data = if chunk.sample_rate != 16000 {
@@ -599,18 +619,9 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                         "Whisper transcription failed for chunk {}: {}",
                         chunk.chunk_id, e
                     );
-
-                    let transcription_error = TranscriptionError::EngineFailed(e.to_string());
-                    let _ = app.emit(
-                        "transcription-error",
-                        &serde_json::json!({
-                            "error": transcription_error.to_string(),
-                            "userMessage": format!("Transcription failed: {}", transcription_error),
-                            "actionable": false
-                        }),
-                    );
-
-                    Err(transcription_error)
+                    // No toast: the worker emits a "<failed chunk>" placeholder
+                    // into the transcript stream when this error surfaces.
+                    Err(TranscriptionError::EngineFailed(e.to_string()))
                 }
             }
         }
@@ -635,18 +646,9 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                         "Parakeet transcription failed for chunk {}: {}",
                         chunk.chunk_id, e
                     );
-
-                    let transcription_error = TranscriptionError::EngineFailed(e.to_string());
-                    let _ = app.emit(
-                        "transcription-error",
-                        &serde_json::json!({
-                            "error": transcription_error.to_string(),
-                            "userMessage": format!("Transcription failed: {}", transcription_error),
-                            "actionable": false
-                        }),
-                    );
-
-                    Err(transcription_error)
+                    // No toast: the worker emits a "<failed chunk>" placeholder
+                    // into the transcript stream when this error surfaces.
+                    Err(TranscriptionError::EngineFailed(e.to_string()))
                 }
             }
         }
@@ -684,16 +686,8 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                         chunk.chunk_id,
                         e
                     );
-
-                    let _ = app.emit(
-                        "transcription-error",
-                        &serde_json::json!({
-                            "error": e.to_string(),
-                            "userMessage": format!("Transcription failed: {}", e),
-                            "actionable": false
-                        }),
-                    );
-
+                    // No toast: the worker emits a "<failed chunk>" placeholder
+                    // into the transcript stream when this error surfaces.
                     Err(e)
                 }
             }

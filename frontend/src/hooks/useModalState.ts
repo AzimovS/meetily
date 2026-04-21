@@ -163,23 +163,6 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
     };
   }, [showModal]);
 
-  // Listen for transcription warnings (per-chunk failures emitted from Rust but previously unwired)
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-
-    const setup = async () => {
-      unlistenFn = await listen<string>('transcription-warning', (event) => {
-        toast.warning(event.payload, { id: 'transcription-warning' });
-      });
-    };
-
-    setup();
-
-    return () => {
-      if (unlistenFn) unlistenFn();
-    };
-  }, []);
-
   // Listen for model download completion to auto-close modal
   useEffect(() => {
     const setupDownloadListeners = async () => {
