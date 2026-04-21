@@ -499,7 +499,10 @@ export function useSummaryGeneration({
       return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
     };
 
+    // Strip "failed chunk" placeholders: they're a visible signal in the live
+    // transcript but must not reach the summary LLM as content to analyze.
     const fullTranscript = allTranscripts
+      .filter(t => t.text !== 'failed chunk')
       .map(t => {
         const time = formatTime(t.audio_start_time, t.timestamp);
         const speaker = t.speaker ? `[${t.speaker}]` : '';

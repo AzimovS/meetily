@@ -21,6 +21,11 @@ static SPEECH_DETECTED_EMITTED: AtomicBool = AtomicBool::new(false);
 // Model-not-loaded error emission flag - emit only once per session to avoid toast spam
 static MODEL_UNLOADED_EMITTED: AtomicBool = AtomicBool::new(false);
 
+// Remote-auth-rejected error emission flag - emit only once per session. Without
+// this, a bad API key produces a silent stream of "failed chunk" placeholders
+// with no recovery prompt; with it, the user gets one actionable toast.
+static AUTH_ERROR_EMITTED: AtomicBool = AtomicBool::new(false);
+
 // Global echo deduplicator - shared across worker iterations
 static ECHO_DEDUP: std::sync::LazyLock<Mutex<EchoDeduplicator>> =
     std::sync::LazyLock::new(|| Mutex::new(EchoDeduplicator::new()));
@@ -119,6 +124,7 @@ impl EchoDeduplicator {
 pub fn reset_speech_detected_flag() {
     SPEECH_DETECTED_EMITTED.store(false, Ordering::SeqCst);
     MODEL_UNLOADED_EMITTED.store(false, Ordering::SeqCst);
+    AUTH_ERROR_EMITTED.store(false, Ordering::SeqCst);
     info!("🔍 SPEECH_DETECTED_EMITTED reset to: {}", SPEECH_DETECTED_EMITTED.load(Ordering::SeqCst));
     // Also reset echo deduplicator
     if let Ok(mut dedup) = ECHO_DEDUP.lock() {
@@ -366,7 +372,8 @@ pub fn start_transcription_task<R: Runtime>(
                                             continue;
                                         }
                                         TranscriptionError::EngineFailed(_)
-                                        | TranscriptionError::UnsupportedLanguage(_) => {
+                                        | TranscriptionError::UnsupportedLanguage(_)
+                                        | TranscriptionError::AuthFailed(_) => {
                                             // Emit an in-transcript placeholder so the failure is
                                             // visible at its timestamp instead of as a disembodied
                                             // toast. Skip speech-detected + echo dedup: a placeholder
@@ -375,6 +382,23 @@ pub fn start_transcription_task<R: Runtime>(
                                                 "Worker {}: Transcription failed, emitting placeholder: {}",
                                                 worker_id, e
                                             );
+
+                                            // For auth failures specifically, also emit a one-shot
+                                            // actionable toast — otherwise a bad API key produces a
+                                            // silent stream of placeholders with no recovery prompt.
+                                            if matches!(e, TranscriptionError::AuthFailed(_))
+                                                && !AUTH_ERROR_EMITTED.swap(true, Ordering::SeqCst)
+                                            {
+                                                error!("Worker {}: Remote auth rejected — emitting user-visible error", worker_id);
+                                                let _ = app_clone.emit(
+                                                    "transcription-error",
+                                                    serde_json::json!({
+                                                        "error": "Remote transcription auth failed",
+                                                        "userMessage": "Remote transcription rejected your credentials. Check your API key in Transcription settings.",
+                                                        "actionable": false
+                                                    }),
+                                                );
+                                            }
 
                                             let sequence_id =
                                                 SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);

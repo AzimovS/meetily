@@ -14,6 +14,7 @@ const INITIAL_BACKOFF_MS: u64 = 300;
 enum RetryVerdict {
     Retry(String),
     Terminal(String),
+    Auth(String),
 }
 
 /// Remote transcription provider
@@ -189,12 +190,18 @@ impl RemoteProvider {
 
             let msg = format!("Remote transcription returned HTTP {}: {}", status, truncated);
 
-            // Retry on 5xx (server error) and 429 (rate limit). Other 4xx
-            // indicate client misconfiguration and won't recover on retry.
-            let is_retryable = status.is_server_error()
-                || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
-            if is_retryable {
+            // Retry on 5xx only. 429 means "slow down" — replying with two
+            // more requests within a second is exactly wrong. 4xx otherwise
+            // indicates client misconfiguration and won't recover on retry.
+            if status.is_server_error() {
                 return Err(RetryVerdict::Retry(msg));
+            } else if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                // 401/403 = credentials rejected. Flag for the worker so it
+                // can surface a one-shot actionable message pointing at
+                // transcription settings.
+                return Err(RetryVerdict::Auth(msg));
             } else {
                 return Err(RetryVerdict::Terminal(msg));
             }
@@ -254,6 +261,15 @@ impl TranscriptionProvider for RemoteProvider {
                         msg
                     );
                     return Err(TranscriptionError::EngineFailed(msg));
+                }
+                Err(RetryVerdict::Auth(msg)) => {
+                    warn!(
+                        "Remote transcription auth failure on attempt {}/{}: {}",
+                        attempt + 1,
+                        MAX_ATTEMPTS,
+                        msg
+                    );
+                    return Err(TranscriptionError::AuthFailed(msg));
                 }
                 Err(RetryVerdict::Retry(msg)) => {
                     last_error = Some(msg.clone());
