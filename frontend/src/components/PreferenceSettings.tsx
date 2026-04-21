@@ -4,77 +4,54 @@ import { useEffect, useState } from "react"
 import { Switch } from "./ui/switch"
 import { FolderOpen } from "lucide-react"
 import { invoke } from "@tauri-apps/api/core"
-import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
+import { useConfig } from "@/contexts/ConfigContext"
+import { toast } from "sonner"
 
 export function PreferenceSettings() {
   const {
-    notificationSettings,
     storageLocations,
     isLoadingPreferences,
     loadPreferences,
-    updateNotificationSettings
   } = useConfig();
 
-  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [previousNotificationsEnabled, setPreviousNotificationsEnabled] = useState<boolean | null>(null);
-  // Lazy load preferences on mount (only loads if not already cached)
+  const [showRecordingReminder, setShowRecordingReminder] = useState<boolean | null>(null);
+
+  // Lazy load storage-location preferences on mount (only loads if not already cached)
   useEffect(() => {
     loadPreferences();
   }, [loadPreferences]);
 
-  // Update notificationsEnabled when notificationSettings are loaded from global state
+  // Load the in-app recording reminder preference from preferences.json.
+  // Mirrors the read in `frontend/src/lib/recordingNotification.tsx` so the
+  // two stay in sync — same store key, same default.
   useEffect(() => {
-    if (notificationSettings) {
-      // Notification enabled means both started and stopped notifications are enabled
-      const enabled =
-        notificationSettings.notification_preferences.show_recording_started &&
-        notificationSettings.notification_preferences.show_recording_stopped;
-      setNotificationsEnabled(enabled);
-      if (isInitialLoad) {
-        setPreviousNotificationsEnabled(enabled);
-        setIsInitialLoad(false);
-      }
-    } else if (!isLoadingPreferences) {
-      // If not loading and no settings, use default
-      setNotificationsEnabled(true);
-      if (isInitialLoad) {
-        setPreviousNotificationsEnabled(true);
-        setIsInitialLoad(false);
-      }
-    }
-  }, [notificationSettings, isLoadingPreferences, isInitialLoad])
-
-  useEffect(() => {
-    // Skip update on initial load or if value hasn't actually changed
-    if (isInitialLoad || notificationsEnabled === null || notificationsEnabled === previousNotificationsEnabled) return;
-    if (!notificationSettings) return;
-
-    const handleUpdateNotificationSettings = async () => {
-      console.log("Updating notification settings to:", notificationsEnabled);
-
+    (async () => {
       try {
-        // Update the notification preferences
-        const updatedSettings: NotificationSettings = {
-          ...notificationSettings,
-          notification_preferences: {
-            ...notificationSettings.notification_preferences,
-            show_recording_started: notificationsEnabled,
-            show_recording_stopped: notificationsEnabled,
-          }
-        };
-
-        console.log("Calling updateNotificationSettings with:", updatedSettings);
-        await updateNotificationSettings(updatedSettings);
-        setPreviousNotificationsEnabled(notificationsEnabled);
-        console.log("Successfully updated notification settings to:", notificationsEnabled);
+        const { Store } = await import('@tauri-apps/plugin-store');
+        const store = await Store.load('preferences.json');
+        const current = (await store.get<boolean>('show_recording_notification')) ?? true;
+        setShowRecordingReminder(current);
       } catch (error) {
-        console.error('Failed to update notification settings:', error);
+        console.error('Failed to load recording reminder preference:', error);
+        setShowRecordingReminder(true);
       }
-    };
+    })();
+  }, []);
 
-    handleUpdateNotificationSettings();
-  }, [notificationsEnabled, notificationSettings, isInitialLoad, previousNotificationsEnabled, updateNotificationSettings])
+  const handleReminderToggle = async (enabled: boolean) => {
+    const previous = showRecordingReminder;
+    setShowRecordingReminder(enabled);
+    try {
+      const { Store } = await import('@tauri-apps/plugin-store');
+      const store = await Store.load('preferences.json');
+      await store.set('show_recording_notification', enabled);
+      await store.save();
+    } catch (error) {
+      setShowRecordingReminder(previous);
+      console.error('Failed to save recording reminder preference:', error);
+      toast.error('Failed to save preference');
+    }
+  };
 
   const handleOpenFolder = async (folderType: 'database' | 'models' | 'recordings') => {
     try {
@@ -96,28 +73,24 @@ export function PreferenceSettings() {
   };
 
   // Show loading only if we're actually loading and don't have cached data
-  if (isLoadingPreferences && !notificationSettings && !storageLocations) {
+  if (isLoadingPreferences && !storageLocations && showRecordingReminder === null) {
     return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
   }
 
-  // Show loading if notificationsEnabled hasn't been determined yet
-  if (notificationsEnabled === null && !isLoadingPreferences) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
-  }
-
-  // Ensure we have a boolean value for the Switch component
-  const notificationsEnabledValue = notificationsEnabled ?? false;
+  const reminderEnabled = showRecordingReminder ?? true;
 
   return (
     <div className="space-y-6">
-      {/* Notifications Section */}
+      {/* In-app Recording Reminder Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Notifications</h3>
-            <p className="text-sm text-gray-600">Enable or disable notifications of start and end of meeting</p>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">In-app recording reminder</h3>
+            <p className="text-sm text-gray-600">
+              Show the compliance reminder toast inside the app when a recording starts.
+            </p>
           </div>
-          <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
+          <Switch checked={reminderEnabled} onCheckedChange={handleReminderToggle} />
         </div>
       </div>
 
