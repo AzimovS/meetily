@@ -1,9 +1,20 @@
 use serde::{Deserialize, Serialize};
 
-/// A meeting detected by the mic-activity signal.
+/// A meeting detected by the mic-activity signal. Used internally by
+/// the detector; not emitted on the Tauri event bus — see
+/// [`DetectedMeetingEvent`] for the public wire shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectedMeeting {
     pub bundle_id: String,
+    pub display_name: String,
+}
+
+/// Public payload for `meeting-detected` / `meeting-ended` Tauri events.
+/// Omits `bundle_id` so Tauri events don't stream app-identity
+/// telemetry to every webview. Agents needing `bundle_id` can read it
+/// via the `get_detection_state` command.
+#[derive(Debug, Clone, Serialize)]
+pub struct DetectedMeetingEvent {
     pub display_name: String,
 }
 

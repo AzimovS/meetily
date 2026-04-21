@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 
 use crate::detection::signals::mic_activity;
 use crate::detection::state::{DetectorConfig, DetectorState};
-use crate::detection::types::DetectionEvent;
+use crate::detection::types::{DetectedMeetingEvent, DetectionEvent};
 use crate::notifications::commands::{
     show_meeting_detected_notification, show_meeting_ended_notification,
     NotificationManagerState,
@@ -31,6 +31,11 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub struct DetectionService {
     state: Arc<Mutex<DetectorState>>,
     running: Arc<AtomicBool>,
+    /// External recording flag, pushed in from the audio layer.
+    /// Lock-free so `set_recording` stays sync and strictly ordered
+    /// even if the poll loop is mid-`advance()`. The poll loop
+    /// snapshots this into `DetectorState` before each tick.
+    is_recording: Arc<AtomicBool>,
 }
 
 impl DetectionService {
@@ -38,6 +43,7 @@ impl DetectionService {
         Self {
             state: Arc::new(Mutex::new(DetectorState::new(config))),
             running,
+            is_recording: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -49,24 +55,12 @@ impl DetectionService {
         debug!("DetectionService::shutdown signalled");
     }
 
-    /// Record that Meetily started/stopped recording. Gates the
-    /// MeetingEnded banner inside the state machine.
+    /// Record that Meetily started/stopped recording. Lock-free atomic
+    /// write — safe to call from any thread, sync or async, in any
+    /// order, without contending on the state-machine mutex.
     pub fn set_recording(&self, recording: bool) {
-        // Runs from audio commands which are async; we need a blocking
-        // lock here. This is called at most once per start/stop.
-        if let Ok(mut guard) = self.state.try_lock() {
-            guard.set_recording(recording);
-            debug!("DetectionService: set_recording({})", recording);
-        } else {
-            // Fall back: spawn to unblock once the poll loop lock
-            // releases. Still quick — advance() holds the lock briefly.
-            let state = self.state.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut guard = state.lock().await;
-                guard.set_recording(recording);
-                debug!("DetectionService: set_recording({}) (async fallback)", recording);
-            });
-        }
+        self.is_recording.store(recording, Ordering::Release);
+        debug!("DetectionService: set_recording({})", recording);
     }
 
     /// Dismiss a detected bundle so further MeetingDetected banners
@@ -96,6 +90,7 @@ where
     let service = DetectionService::new(DetectorConfig::DEFAULT, running.clone());
     let state = service.state.clone();
     let running_for_task = running.clone();
+    let is_recording_for_task = service.is_recording.clone();
 
     let sampler = match mic_activity::create() {
         Ok(s) => s,
@@ -126,8 +121,12 @@ where
                 }
             };
 
+            // Sync the externally-pushed recording flag into the state
+            // machine right before advancing. Done under the state lock
+            // so `advance()` sees a coherent value.
             let event = {
                 let mut guard = state.lock().await;
+                guard.set_recording(is_recording_for_task.load(Ordering::Acquire));
                 guard.advance(Instant::now(), &snapshot)
             };
 
@@ -138,10 +137,16 @@ where
                 DetectionEvent::MeetingDetected(m) => {
                     info!("Meeting detection: DETECTED {}", m.display_name);
                     debug!("Meeting detection: DETECTED bundle={}", m.bundle_id);
-                    // Emit Tauri event so frontend / agents can observe
-                    // alongside the notification banner.
-                    if let Err(e) = app.emit("meeting-detected", &m) {
-                        debug!("failed to emit meeting-detected event: {}", e);
+                    // Only emit the event when the corresponding banner
+                    // preference is enabled. Keeps the event and the
+                    // user-facing banner under the same user control,
+                    // and strips `bundle_id` from the payload — agents
+                    // can still read it via `get_detection_state`.
+                    if pref_show_meeting_detected(mgr_state.inner()).await {
+                        let payload = DetectedMeetingEvent { display_name: m.display_name.clone() };
+                        if let Err(e) = app.emit("meeting-detected", &payload) {
+                            debug!("failed to emit meeting-detected event: {}", e);
+                        }
                     }
                     if let Err(e) = show_meeting_detected_notification(
                         &app, mgr_state.inner(), m.display_name,
@@ -152,8 +157,11 @@ where
                 DetectionEvent::MeetingEnded(m) => {
                     info!("Meeting detection: ENDED {}", m.display_name);
                     debug!("Meeting detection: ENDED bundle={}", m.bundle_id);
-                    if let Err(e) = app.emit("meeting-ended", &m) {
-                        debug!("failed to emit meeting-ended event: {}", e);
+                    if pref_show_meeting_ended(mgr_state.inner()).await {
+                        let payload = DetectedMeetingEvent { display_name: m.display_name.clone() };
+                        if let Err(e) = app.emit("meeting-ended", &payload) {
+                            debug!("failed to emit meeting-ended event: {}", e);
+                        }
                     }
                     if let Err(e) = show_meeting_ended_notification(
                         &app, mgr_state.inner(), m.display_name,
@@ -168,4 +176,39 @@ where
     });
 
     service
+}
+
+/// Read the `show_meeting_detected` preference from the live notification
+/// manager. Defaults to `true` if the manager isn't initialized yet so
+/// the first detection after startup isn't silently dropped.
+async fn pref_show_meeting_detected<R: Runtime>(
+    manager_state: &NotificationManagerState<R>,
+) -> bool {
+    let guard = manager_state.read().await;
+    match guard.as_ref() {
+        Some(manager) => {
+            manager
+                .get_settings()
+                .await
+                .notification_preferences
+                .show_meeting_detected
+        }
+        None => true,
+    }
+}
+
+async fn pref_show_meeting_ended<R: Runtime>(
+    manager_state: &NotificationManagerState<R>,
+) -> bool {
+    let guard = manager_state.read().await;
+    match guard.as_ref() {
+        Some(manager) => {
+            manager
+                .get_settings()
+                .await
+                .notification_preferences
+                .show_meeting_ended
+        }
+        None => true,
+    }
 }

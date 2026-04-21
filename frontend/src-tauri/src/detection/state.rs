@@ -75,6 +75,9 @@ pub struct DetectorPhaseSnapshot {
     /// One of `"idle" | "sustaining" | "detected" | "ending"`.
     pub phase: &'static str,
     pub display_name: Option<String>,
+    /// Raw bundle ID for the current candidate — the identity
+    /// `dismiss_detected_meeting` expects. `None` in `Idle`.
+    pub bundle_id: Option<String>,
     pub elapsed_ms: Option<u64>,
     pub remaining_ms: Option<u64>,
     pub is_recording: bool,
@@ -308,6 +311,7 @@ impl DetectorState {
             Phase::Idle => DetectorPhaseSnapshot {
                 phase: "idle",
                 display_name: None,
+                bundle_id: None,
                 elapsed_ms: None,
                 remaining_ms: None,
                 is_recording: self.is_recording,
@@ -322,6 +326,7 @@ impl DetectorState {
                 DetectorPhaseSnapshot {
                     phase: "sustaining",
                     display_name: Some(matcher::display_name(bundle).to_string()),
+                    bundle_id: Some(bundle.clone()),
                     elapsed_ms: Some(elapsed.as_millis() as u64),
                     remaining_ms: Some(threshold.saturating_sub(elapsed).as_millis() as u64),
                     is_recording: self.is_recording,
@@ -330,6 +335,7 @@ impl DetectorState {
             Phase::Detected { bundle } => DetectorPhaseSnapshot {
                 phase: "detected",
                 display_name: Some(matcher::display_name(bundle).to_string()),
+                bundle_id: Some(bundle.clone()),
                 elapsed_ms: None,
                 remaining_ms: None,
                 is_recording: self.is_recording,
@@ -343,6 +349,7 @@ impl DetectorState {
                 DetectorPhaseSnapshot {
                     phase: "ending",
                     display_name: Some(matcher::display_name(bundle).to_string()),
+                    bundle_id: Some(bundle.clone()),
                     elapsed_ms: Some(elapsed.as_millis() as u64),
                     remaining_ms: Some(
                         self.config.end_silence.saturating_sub(elapsed).as_millis() as u64,
@@ -671,6 +678,38 @@ mod tests {
         assert_eq!(snap.display_name.as_deref(), Some("Zoom"));
         // 10s threshold - 3s elapsed = 7000ms remaining
         assert!(snap.remaining_ms.unwrap() <= 7_000 && snap.remaining_ms.unwrap() > 6_500);
+    }
+
+    #[test]
+    fn phase_snapshot_exposes_bundle_id_for_non_idle_phases() {
+        let mut s = DetectorState::new(test_config());
+        let t0 = Instant::now();
+
+        // Idle → no bundle_id
+        assert_eq!(s.phase_snapshot(t0).bundle_id, None);
+
+        // Sustaining → bundle_id present
+        s.advance(t0, &snapshot(&["us.zoom.xos"]));
+        assert_eq!(
+            s.phase_snapshot(t0).bundle_id.as_deref(),
+            Some("us.zoom.xos")
+        );
+
+        // Detected → bundle_id present
+        let t_detect = t0 + Duration::from_secs(10);
+        s.advance(t_detect, &snapshot(&["us.zoom.xos"]));
+        assert_eq!(
+            s.phase_snapshot(t_detect).bundle_id.as_deref(),
+            Some("us.zoom.xos")
+        );
+
+        // Ending → bundle_id still present (the app we were tracking)
+        let t_release = t_detect + Duration::from_secs(5);
+        s.advance(t_release, &snapshot(&[]));
+        assert_eq!(
+            s.phase_snapshot(t_release).bundle_id.as_deref(),
+            Some("us.zoom.xos")
+        );
     }
 
     #[test]
