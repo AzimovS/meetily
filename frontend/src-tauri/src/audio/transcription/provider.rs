@@ -16,6 +16,9 @@ pub enum TranscriptionError {
     AudioTooShort { samples: usize, minimum: usize },
     EngineFailed(String),
     UnsupportedLanguage(String),
+    /// Remote provider rejected credentials (HTTP 401 or 403). Distinct from
+    /// EngineFailed so the worker can emit a one-shot actionable toast.
+    AuthFailed(String),
 }
 
 impl std::fmt::Display for TranscriptionError {
@@ -31,6 +34,7 @@ impl std::fmt::Display for TranscriptionError {
             Self::UnsupportedLanguage(lang) => {
                 write!(f, "Language '{}' is not supported by this provider", lang)
             }
+            Self::AuthFailed(msg) => write!(f, "Remote transcription auth failed: {}", msg),
         }
     }
 }
