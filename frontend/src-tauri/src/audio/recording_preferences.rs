@@ -29,7 +29,10 @@ impl Default for RecordingPreferences {
     fn default() -> Self {
         Self {
             save_folder: get_default_recordings_folder(),
-            auto_save: true,
+            // Off by default: keep disk footprint minimal for privacy-first users.
+            // Transcripts, summaries, and recovery work without the audio file;
+            // users who want audio retained can flip this in Recording Settings.
+            auto_save: false,
             file_format: "mp4".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,

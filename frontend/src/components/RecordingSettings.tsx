@@ -21,7 +21,7 @@ interface RecordingSettingsProps {
 export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const [preferences, setPreferences] = useState<RecordingPreferences>({
     save_folder: '',
-    auto_save: true,
+    auto_save: false,
     file_format: 'mp4',
     preferred_mic_device: null,
     preferred_system_device: null
