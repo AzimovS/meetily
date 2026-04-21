@@ -93,14 +93,16 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   };
 
   const handleNotificationToggle = async (enabled: boolean) => {
+    const previous = showRecordingNotification;
+    setShowRecordingNotification(enabled);
     try {
-      setShowRecordingNotification(enabled);
       const { Store } = await import('@tauri-apps/plugin-store');
       const store = await Store.load('preferences.json');
       await store.set('show_recording_notification', enabled);
       await store.save();
       toast.success('Preference saved');
     } catch (error) {
+      setShowRecordingNotification(previous);
       console.error('Failed to save notification preference:', error);
       toast.error('Failed to save preference');
     }

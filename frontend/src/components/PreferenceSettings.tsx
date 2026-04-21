@@ -39,6 +39,7 @@ export function PreferenceSettings() {
   }, []);
 
   const handleReminderToggle = async (enabled: boolean) => {
+    const previous = showRecordingReminder;
     setShowRecordingReminder(enabled);
     try {
       const { Store } = await import('@tauri-apps/plugin-store');
@@ -46,6 +47,7 @@ export function PreferenceSettings() {
       await store.set('show_recording_notification', enabled);
       await store.save();
     } catch (error) {
+      setShowRecordingReminder(previous);
       console.error('Failed to save recording reminder preference:', error);
       toast.error('Failed to save preference');
     }
