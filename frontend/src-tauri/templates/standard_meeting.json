@@ -9,7 +9,7 @@
     },
     {
       "title": "Key Topics",
-      "instruction": "Identify the 3-5 major topics discussed. For each, write 2-4 sentences in natural prose: what was said, what was decided, and what remains unresolved. Attribute key statements to speakers when labels are available. Use clear topic sentences. Do not use bullet points — write flowing paragraphs under each topic heading.",
+      "instruction": "For each of the 3-5 major topics, write 2-4 sentences of substantive prose. Each topic's coverage must: (a) name at least one specific person, tool, number, or quoted phrase from the transcript; (b) summarize the *substance* of what was argued (the reasoning, not just the subject); (c) note the resolution if any. Do not use meta-descriptions like \"X was discussed\" — state what was actually said. If a topic has no substantive content in the transcript beyond its name, omit it. Attribute key statements to speakers when labels are available. Use clear topic sentences. Do not use bullet points — write flowing paragraphs under each topic heading.",
       "format": "paragraph"
     },
     {

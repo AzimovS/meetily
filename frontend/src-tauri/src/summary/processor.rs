@@ -330,12 +330,23 @@ PRIORITIZE: proposals ("I think we should..."), dates/deadlines/numbers, disagre
 - The transcript may contain generic speaker labels like [You] (the local user's microphone) and [Others] (remote participants). Do NOT use these labels as names. Instead, try to infer actual names from the conversation context (e.g., if someone says "Thanks, Sarah" or "John, can you handle that?"). If no real names can be determined, simply describe what was said without attribution rather than writing "Unnamed participant" or similar placeholders.
 - Correct obvious transcription errors (homophones, technical terms) silently.
 - Distinguish decisions (finalized) from discussions (still open).
-- Use direct quotes sparingly — only when exact wording matters.
 
 **CONCISENESS:**
-- Be proportionally concise: a short transcript gets a short summary.
+- Be concise but never at the cost of specificity — prefer one concrete detail over three generic ones. Proportional length still applies: a short transcript gets a short summary.
 - Approximate transcript length: {} words.
 - If a section has no relevant content, omit it entirely from the output.
+
+**SPECIFICITY (enforced):**
+- Every topic paragraph must name at least one specific thing: a person, a tool/product, a number, a date, or a quoted phrase. If no specifics are present in the source for a topic, omit the topic.
+- Prefer the specific over the general: "Priya argued Tempo's 30-day free-tier retention is a blocker" beats "concerns were raised about retention limits."
+- When a speaker made a memorable or load-bearing statement, quote a short fragment verbatim — 3 to 12 words — in-line.
+- Never write "the team discussed X and its pros and cons" or equivalent meta-descriptions. If the only thing you can say about a topic is that it was discussed, omit it.
+
+**BAD (never produce):**
+"The team discussed observability tooling and weighed pros and cons before agreeing on next steps."
+
+**GOOD:**
+"Priya proposed replacing Datadog with Grafana + Tempo, citing ~$42k/yr savings. Marcus pushed back that Tempo's trace retention caps at 30 days on the free tier. They agreed Priya will prototype Tempo on staging by Oct 28; decision deferred to the Nov 4 infra sync."
 
 **OUTPUT:**
 - Only include information explicitly stated in the source text; do not add or infer anything.
