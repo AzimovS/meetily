@@ -60,6 +60,19 @@ pub struct NotificationPreferences {
 
     /// Minutes before meeting to show reminder (0 = disabled)
     pub meeting_reminder_minutes: Vec<u64>,
+
+    /// Show "Meeting detected" banner when mic-activity detection fires.
+    #[serde(default = "default_true")]
+    pub show_meeting_detected: bool,
+
+    /// Show "Meeting ended" banner when mic-activity detection fires
+    /// during an active recording.
+    #[serde(default = "default_true")]
+    pub show_meeting_ended: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for NotificationSettings {
@@ -89,6 +102,8 @@ impl Default for NotificationPreferences {
             show_meeting_reminders: true,
             show_system_errors: true,
             meeting_reminder_minutes: vec![15, 5], // 15 minutes and 5 minutes before
+            show_meeting_detected: true,
+            show_meeting_ended: true,
         }
     }
 }

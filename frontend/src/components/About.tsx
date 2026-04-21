@@ -22,7 +22,9 @@ type DebugNotificationKind =
     | 'transcription_complete'
     | 'meeting_reminder'
     | 'system_error'
-    | 'test';
+    | 'test'
+    | 'meeting_detected'
+    | 'meeting_ended';
 
 // `prefKey` matches a Rust NotificationPreferences field; omitted when a type isn't gated by preference.
 const DEBUG_NOTIFICATION_ITEMS: Array<{
@@ -38,6 +40,8 @@ const DEBUG_NOTIFICATION_ITEMS: Array<{
     { kind: 'meeting_reminder',       label: 'Meeting reminder (5 min)', prefKey: 'show_meeting_reminders' },
     { kind: 'system_error',           label: 'System error',             prefKey: 'show_system_errors' },
     { kind: 'test',                   label: 'Generic test notification' },
+    { kind: 'meeting_detected',       label: 'Meeting detected (auto)',  prefKey: 'show_meeting_detected' },
+    { kind: 'meeting_ended',          label: 'Meeting ended (auto)',     prefKey: 'show_meeting_ended' },
 ];
 
 
