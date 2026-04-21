@@ -2,6 +2,7 @@
 //
 // Parallel transcription worker pool and chunk processing logic.
 
+use super::constants::FAILED_CHUNK_PLACEHOLDER;
 use super::engine::TranscriptionEngine;
 use super::provider::TranscriptionError;
 use crate::audio::AudioChunk;
@@ -405,7 +406,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             let audio_end_time = chunk_timestamp + chunk_duration;
 
                                             let placeholder = TranscriptUpdate {
-                                                text: "failed chunk".to_string(),
+                                                text: FAILED_CHUNK_PLACEHOLDER.to_string(),
                                                 timestamp: format_current_timestamp(),
                                                 source: "Audio".to_string(),
                                                 sequence_id,
@@ -643,7 +644,7 @@ async fn transcribe_chunk_with_provider(
                         "Whisper transcription failed for chunk {}: {}",
                         chunk.chunk_id, e
                     );
-                    // No toast: the worker emits a "<failed chunk>" placeholder
+                    // No toast: the worker emits a FAILED_CHUNK_PLACEHOLDER
                     // into the transcript stream when this error surfaces.
                     Err(TranscriptionError::EngineFailed(e.to_string()))
                 }
@@ -670,7 +671,7 @@ async fn transcribe_chunk_with_provider(
                         "Parakeet transcription failed for chunk {}: {}",
                         chunk.chunk_id, e
                     );
-                    // No toast: the worker emits a "<failed chunk>" placeholder
+                    // No toast: the worker emits a FAILED_CHUNK_PLACEHOLDER
                     // into the transcript stream when this error surfaces.
                     Err(TranscriptionError::EngineFailed(e.to_string()))
                 }
@@ -710,7 +711,7 @@ async fn transcribe_chunk_with_provider(
                         chunk.chunk_id,
                         e
                     );
-                    // No toast: the worker emits a "<failed chunk>" placeholder
+                    // No toast: the worker emits a FAILED_CHUNK_PLACEHOLDER
                     // into the transcript stream when this error surfaces.
                     Err(e)
                 }
