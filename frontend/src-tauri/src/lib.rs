@@ -500,8 +500,19 @@ pub fn run() {
             // Recording state is pushed in from `audio::recording_commands`
             // via `DetectionService::set_recording`, so detection stays
             // decoupled from audio's internal flag implementation.
-            let detection_service = detection::spawn(_app.handle().clone());
-            _app.manage(detection_service);
+            //
+            // macOS-only for now. The Windows (WASAPI) and Linux
+            // (libpulse-binding) samplers compile and are in the tree,
+            // but neither has been validated on real hardware. Gating
+            // the spawn call keeps the platform code shipping without
+            // running it for users. Follow-up PRs will flip these
+            // cfgs once each platform is validated end-to-end and a
+            // settings-level kill switch is in place.
+            #[cfg(target_os = "macos")]
+            {
+                let detection_service = detection::spawn(_app.handle().clone());
+                _app.manage(detection_service);
+            }
 
             // Set models directory to use app_data_dir (unified storage location)
             whisper_engine::commands::set_models_directory(&_app.handle());
@@ -720,7 +731,9 @@ pub fn run() {
             notifications::commands::test_notification_with_auto_consent,
             notifications::commands::get_notification_stats,
             notifications::commands::debug_show_notification,
+            #[cfg(target_os = "macos")]
             detection::commands::dismiss_detected_meeting,
+            #[cfg(target_os = "macos")]
             detection::commands::get_detection_state,
             // System audio capture commands
             audio::system_audio_commands::start_system_audio_capture_command,
@@ -771,7 +784,9 @@ pub fn run() {
                 log::info!("Application exiting, cleaning up resources...");
 
                 // Signal the detection poll task to exit before tauri
-                // starts dropping AppHandle / state.
+                // starts dropping AppHandle / state. macOS-only — the
+                // service is never managed on other platforms.
+                #[cfg(target_os = "macos")]
                 if let Some(svc) = _app_handle.try_state::<detection::DetectionService>() {
                     svc.shutdown();
                 }
