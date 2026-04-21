@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>This application needs access to your microphone to record meeting audio.</string>
+    <string>Meetily uses your microphone to record meetings you ask it to capture, and observes which apps are currently using the microphone so it can offer to auto-record when a meeting starts.</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>This application needs screen recording permission to capture system audio during meetings.</string>
     <key>NSAudioCaptureUsageDescription</key>
