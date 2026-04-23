@@ -22,9 +22,11 @@ pub async fn api_calendar_status() -> Result<ConnectionStatus, String> {
 #[tauri::command]
 pub async fn api_calendar_connect() -> Result<ConnectionStatus, String> {
     let store = KeyringTokenStore;
-    // Clear any prior tokens before starting a fresh consent.
-    store.delete(TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
 
+    // NOTE: we deliberately do NOT delete existing tokens before consent.
+    // If the OAuth flow fails (user cancels, timeout, network), the user
+    // stays connected with their prior tokens rather than being silently
+    // logged out.
     let tokens = oauth::connect().await?;
 
     let now = SystemTime::now()
@@ -38,13 +40,10 @@ pub async fn api_calendar_connect() -> Result<ConnectionStatus, String> {
         email: None,
     };
 
-    // Best-effort email fetch. We already have a valid access_token — one
-    // API call to /calendars/primary gives us the user's email. Failure
-    // is non-blocking: persist tokens without email, UI shows a
-    // placeholder "Connected" and we retry the fetch on next status.
+    // Best-effort email fetch. Failure is non-blocking.
     match api::fetch_primary_calendar_email(&stored.access_token).await {
         Ok(email) => {
-            log::info!("[calendar] Connected as {email}");
+            log::info!("[calendar] Connected to Google Calendar");
             stored.email = Some(email);
         }
         Err(e) => {
@@ -52,6 +51,7 @@ pub async fn api_calendar_connect() -> Result<ConnectionStatus, String> {
         }
     }
 
+    // Save the new tokens — last write wins, overwriting any prior entry.
     store
         .save(TokenKey::GOOGLE_CALENDAR_DEFAULT, &stored)
         .await?;
@@ -65,49 +65,59 @@ pub async fn api_calendar_connect() -> Result<ConnectionStatus, String> {
 pub async fn api_calendar_disconnect() -> Result<(), String> {
     let store = KeyringTokenStore;
 
-    if let Some(tokens) = store.load(TokenKey::GOOGLE_CALENDAR_DEFAULT).await? {
+    // Delete-first: the keyring is the source of truth for "is this user
+    // connected?". Revoking on Google but failing to delete locally would
+    // leave the app in a broken state where the next API call hits
+    // invalid_grant with no reconnect path.
+    let prior = store.load(TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
+    store.delete(TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
+    log::info!("[calendar] Local tokens deleted");
+
+    // Best-effort Google revoke using the refresh_token we just loaded.
+    // Failure leaves Google's server-side grant active; there's no code
+    // path that will retry. Log loudly so users who care can clean up
+    // via https://myaccount.google.com/permissions.
+    if let Some(tokens) = prior {
         let token_to_revoke = tokens
             .refresh_token
             .as_deref()
-            .unwrap_or(tokens.access_token.as_str());
-
-        let http = match reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("[calendar] Revoke HTTP client build failed: {e}");
-                store.delete(TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
-                return Ok(());
+            .unwrap_or(tokens.access_token.as_str())
+            .to_string();
+        tokio::spawn(async move {
+            let http = match reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("[calendar] Revoke HTTP client build failed: {e}");
+                    return;
+                }
+            };
+            match http
+                .post(REVOKE_URL)
+                .form(&[("token", token_to_revoke.as_str())])
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    log::info!("[calendar] Google revoke succeeded");
+                }
+                Ok(resp) => {
+                    log::warn!(
+                        "[calendar] Google revoke returned {}; remote grant may still be active",
+                        resp.status()
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[calendar] Google revoke request failed: {e}; remote grant may still be active"
+                    );
+                }
             }
-        };
-
-        match http
-            .post(REVOKE_URL)
-            .form(&[("token", token_to_revoke)])
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                log::info!("[calendar] Google revoke succeeded");
-            }
-            Ok(resp) => {
-                log::warn!(
-                    "[calendar] Google revoke returned {}; deleting local tokens anyway",
-                    resp.status()
-                );
-            }
-            Err(e) => {
-                log::warn!(
-                    "[calendar] Google revoke request failed: {e}; deleting local tokens anyway"
-                );
-            }
-        }
+        });
     }
 
-    store.delete(TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
-    log::info!("[calendar] Local tokens deleted");
     Ok(())
 }
 

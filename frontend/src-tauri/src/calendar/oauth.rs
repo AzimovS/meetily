@@ -1,17 +1,19 @@
 //! Google OAuth 2.0 Desktop flow (PKCE + loopback + client_secret).
 //!
-//! See RFC 8252 (OAuth for Native Apps) and RFC 7636 (PKCE). Google's
-//! Desktop flow requires both PKCE *and* client_secret on token
-//! exchange — see `credentials.rs` for the reasoning. We use the
-//! `oauth2` crate for authorization-URL building and PKCE helpers (pure
-//! Rust, no HTTP) and run the token-exchange POST manually via the
-//! project's existing `reqwest` 0.11 client.
+//! PKCE, CSRF state, and authorization-URL construction are done inline
+//! (no oauth2 crate, to avoid pulling in a duplicate reqwest/hyper/rustls
+//! stack). Token exchange and refresh go through the project's existing
+//! reqwest 0.11 client. Google's Desktop flow requires both PKCE *and*
+//! client_secret on token exchange — see `credentials.rs` for the
+//! reasoning.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use oauth2::basic::BasicClient;
-use oauth2::{AuthUrl, ClientId, CsrfToken, PkceCodeChallenge, RedirectUrl, Scope, TokenUrl};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use rand::RngCore;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
@@ -29,6 +31,12 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
 /// Scope required for reading the user's calendar events.
 const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events.readonly";
+
+/// Guard against overlapping consent flows. A user double-clicking
+/// Connect would otherwise bind two loopback listeners and open two
+/// browser tabs; the "losing" flow also causes token churn via the
+/// deleting/writing interleaving in `api_calendar_connect`.
+static CONNECT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug)]
 pub struct Tokens {
@@ -54,12 +62,10 @@ struct TokenError {
 /// not return a new refresh_token — the caller preserves the existing
 /// one if the response omits it.
 pub async fn refresh_access_token(refresh_token: &str) -> Result<Tokens, String> {
-    let client_id = credentials::client_id().ok_or_else(|| {
-        "Meetily was built without a Google OAuth client id.".to_string()
-    })?;
-    let client_secret = credentials::client_secret().ok_or_else(|| {
-        "Meetily was built without a Google OAuth client secret.".to_string()
-    })?;
+    let client_id = credentials::client_id()
+        .ok_or_else(|| "Missing Google OAuth client id (build-time)".to_string())?;
+    let client_secret = credentials::client_secret()
+        .ok_or_else(|| "Missing Google OAuth client secret (build-time)".to_string())?;
 
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -87,22 +93,11 @@ pub async fn refresh_access_token(refresh_token: &str) -> Result<Tokens, String>
         .map_err(|e| format!("Failed to read refresh response body: {e}"))?;
 
     if !status.is_success() {
-        let detail = serde_json::from_str::<TokenError>(&body)
-            .map(|e| {
-                format!(
-                    "{}{}",
-                    e.error,
-                    e.error_description
-                        .map(|d| format!(" — {d}"))
-                        .unwrap_or_default()
-                )
-            })
-            .unwrap_or_else(|_| body.clone());
-        return Err(format!("refresh_failed:{status}:{detail}"));
+        return Err(format_token_error("refresh", status, &body));
     }
 
     let parsed: TokenResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Refresh response not valid JSON: {e}; body: {body}"))?;
+        .map_err(|_| format!("Refresh response malformed (status {status})"))?;
 
     Ok(Tokens {
         access_token: parsed.access_token,
@@ -112,18 +107,22 @@ pub async fn refresh_access_token(refresh_token: &str) -> Result<Tokens, String>
 }
 
 /// Run the full connect flow. Blocks until the user consents in their
-/// browser or the 120-second timeout elapses.
+/// browser or the 120-second timeout elapses. Returns `Err` immediately
+/// if another connect is already in progress.
 pub async fn connect() -> Result<Tokens, String> {
-    let client_id = credentials::client_id().ok_or_else(|| {
-        "Meetily was built without a Google OAuth client id. \
-         Set MEETILY_GOOGLE_CLIENT_ID at build time."
-            .to_string()
-    })?;
-    let client_secret = credentials::client_secret().ok_or_else(|| {
-        "Meetily was built without a Google OAuth client secret. \
-         Set MEETILY_GOOGLE_CLIENT_SECRET at build time."
-            .to_string()
-    })?;
+    if CONNECT_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("A Google Calendar connect is already in progress".to_string());
+    }
+    // RAII guard so we always clear the flag, even on panics.
+    let _guard = InFlightGuard;
+
+    let client_id = credentials::client_id()
+        .ok_or_else(|| "Missing Google OAuth client id (build-time)".to_string())?;
+    let client_secret = credentials::client_secret()
+        .ok_or_else(|| "Missing Google OAuth client secret (build-time)".to_string())?;
 
     // 1. Bind loopback first so we know the port before building the auth URL.
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -135,29 +134,17 @@ pub async fn connect() -> Result<Tokens, String> {
         .port();
     let redirect_uri = format!("http://127.0.0.1:{port}");
 
-    // 2. PKCE challenge + verifier.
-    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    // 2. PKCE challenge + verifier + CSRF state.
+    let pkce_verifier = random_base64_url(32);
+    let pkce_challenge = sha256_base64_url(&pkce_verifier);
+    let csrf_state = random_base64_url(24);
 
-    // 3. Use oauth2 to build the authorization URL. The client_secret is
-    //    not sent here — it's only used in the token-exchange POST below.
-    let client = BasicClient::new(ClientId::new(client_id.to_string()))
-        .set_auth_uri(AuthUrl::new(AUTH_URL.to_string()).map_err(|e| e.to_string())?)
-        .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).map_err(|e| e.to_string())?)
-        .set_redirect_uri(RedirectUrl::new(redirect_uri.clone()).map_err(|e| e.to_string())?);
-
-    let (auth_url, csrf_token) = client
-        .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new(CALENDAR_SCOPE.to_string()))
-        .set_pkce_challenge(pkce_challenge)
-        // access_type=offline asks Google to issue a refresh_token.
-        .add_extra_param("access_type", "offline")
-        // prompt=consent forces the refresh_token to be re-issued each connect.
-        .add_extra_param("prompt", "consent")
-        .url();
+    // 3. Build the authorization URL. No client_secret here — that ships
+    //    only with the token-exchange POST below.
+    let auth_url = build_authorize_url(client_id, &redirect_uri, &pkce_challenge, &csrf_state);
 
     // 4. Open the user's default browser.
-    opener::open(auth_url.as_str())
-        .map_err(|e| format!("Failed to open browser: {e}"))?;
+    opener::open(&auth_url).map_err(|e| format!("Failed to open browser: {e}"))?;
 
     log::info!(
         "[calendar] OAuth consent URL opened; awaiting loopback callback on 127.0.0.1:{port}"
@@ -170,11 +157,11 @@ pub async fn connect() -> Result<Tokens, String> {
         .map_err(|e| format!("Loopback callback failed: {e}"))?;
 
     // 6. CSRF check.
-    if returned_state != *csrf_token.secret() {
+    if returned_state != csrf_state {
         return Err("OAuth state mismatch (possible CSRF). Aborting.".to_string());
     }
 
-    // 7. Exchange the authorization code for tokens (manual POST, reqwest 0.11).
+    // 7. Exchange the authorization code for tokens.
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -182,7 +169,7 @@ pub async fn connect() -> Result<Tokens, String> {
 
     let form = [
         ("code", code.as_str()),
-        ("code_verifier", pkce_verifier.secret().as_str()),
+        ("code_verifier", pkce_verifier.as_str()),
         ("client_id", client_id),
         ("client_secret", client_secret),
         ("redirect_uri", redirect_uri.as_str()),
@@ -203,22 +190,11 @@ pub async fn connect() -> Result<Tokens, String> {
         .map_err(|e| format!("Failed to read token response body: {e}"))?;
 
     if !status.is_success() {
-        let detail = serde_json::from_str::<TokenError>(&body)
-            .map(|e| {
-                format!(
-                    "{}{}",
-                    e.error,
-                    e.error_description
-                        .map(|d| format!(" — {d}"))
-                        .unwrap_or_default()
-                )
-            })
-            .unwrap_or_else(|_| body.clone());
-        return Err(format!("Token exchange failed ({status}): {detail}"));
+        return Err(format_token_error("token exchange", status, &body));
     }
 
     let parsed: TokenResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Token response not valid JSON: {e}; body: {body}"))?;
+        .map_err(|_| format!("Token response malformed (status {status})"))?;
 
     Ok(Tokens {
         access_token: parsed.access_token,
@@ -227,8 +203,85 @@ pub async fn connect() -> Result<Tokens, String> {
     })
 }
 
-/// Accept one incoming HTTP GET on the loopback listener, parse the `code`
-/// and `state` query params, and return them.
+struct InFlightGuard;
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        CONNECT_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
+/// Format a Google OAuth error response without including the raw body
+/// (which on malformed responses may contain tokens). We only surface
+/// the `error` + `error_description` fields, which Google's spec says
+/// are safe.
+fn format_token_error(kind: &str, status: reqwest::StatusCode, body: &str) -> String {
+    match serde_json::from_str::<TokenError>(body) {
+        Ok(e) => {
+            let desc = e
+                .error_description
+                .map(|d| format!(" — {d}"))
+                .unwrap_or_default();
+            format!("OAuth {kind} failed ({status}): {}{desc}", e.error)
+        }
+        Err(_) => format!("OAuth {kind} failed ({status}): malformed response"),
+    }
+}
+
+fn build_authorize_url(
+    client_id: &str,
+    redirect_uri: &str,
+    pkce_challenge: &str,
+    state: &str,
+) -> String {
+    let pairs = [
+        ("client_id", client_id),
+        ("redirect_uri", redirect_uri),
+        ("response_type", "code"),
+        ("scope", CALENDAR_SCOPE),
+        ("access_type", "offline"),
+        ("prompt", "consent"),
+        ("code_challenge", pkce_challenge),
+        ("code_challenge_method", "S256"),
+        ("state", state),
+    ];
+
+    let query = pairs
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, urlencode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{AUTH_URL}?{query}")
+}
+
+fn random_base64_url(byte_len: usize) -> String {
+    let mut bytes = vec![0u8; byte_len];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(&bytes)
+}
+
+fn sha256_base64_url(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    URL_SAFE_NO_PAD.encode(hasher.finalize())
+}
+
+/// RFC 3986 unreserved + `%XX` percent-encoding, sufficient for OAuth
+/// URL query values (scopes, state, etc).
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Accept one incoming HTTP GET on the loopback listener, parse the
+/// `code` and `state` query params, and return them.
 async fn wait_for_callback(listener: &TcpListener) -> std::io::Result<(String, String)> {
     let (mut socket, _) = listener.accept().await?;
 

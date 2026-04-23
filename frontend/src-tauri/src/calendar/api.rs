@@ -11,7 +11,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use once_cell::sync::Lazy;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
 use crate::calendar::oauth;
 use crate::calendar::token_store::{StoredTokens, TokenKey, TokenStore};
@@ -23,10 +25,19 @@ const REFRESH_LEEWAY_SECS: u64 = 60;
 
 const CALENDAR_API_BASE: &str = "https://www.googleapis.com/calendar/v3";
 
+/// Global singleflight lock for token refresh. Multi-account (if it
+/// lands) would key this by `TokenKey`; v1 has one account slot, so a
+/// single Mutex suffices. Without this, two concurrent callers that
+/// both observe an expired access_token double-refresh, causing quota
+/// waste and a last-write-wins race on keyring save.
+static REFRESH_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
 /// Load the stored tokens, refreshing if near expiry, and return a valid
-/// access_token plus the (possibly updated) StoredTokens. Callers that
-/// persist the returned StoredTokens back to the keychain keep email +
-/// refresh_token intact across rotations.
+/// access_token plus the (possibly updated) StoredTokens. Refresh is
+/// serialized via a global Mutex with double-checked locking — only the
+/// first caller of N concurrent refresh candidates actually hits
+/// Google's token endpoint; the others observe the refreshed tokens
+/// post-lock and skip the refresh.
 pub async fn get_fresh_access_token<S: TokenStore>(
     store: &S,
     key: TokenKey,
@@ -36,24 +47,34 @@ pub async fn get_fresh_access_token<S: TokenStore>(
         .await?
         .ok_or_else(|| "No stored tokens — user is not connected".to_string())?;
 
-    let now = now_secs();
-    let expired = tokens
-        .expires_at
-        .map(|t| now + REFRESH_LEEWAY_SECS >= t)
-        .unwrap_or(false);
+    if !is_near_expiry(&tokens) {
+        return Ok((tokens.access_token.clone(), tokens));
+    }
 
-    if !expired {
+    // Acquire the refresh lock. Hold it across the network call and the
+    // keyring write so concurrent callers serialize.
+    let _guard = REFRESH_LOCK.lock().await;
+
+    // Double-check: another caller may have refreshed while we waited.
+    let tokens = store
+        .load(key)
+        .await?
+        .ok_or_else(|| "No stored tokens — user is not connected".to_string())?;
+    if !is_near_expiry(&tokens) {
         return Ok((tokens.access_token.clone(), tokens));
     }
 
     let refresh_token = tokens
         .refresh_token
         .as_deref()
-        .ok_or_else(|| "Access token expired and no refresh_token available — reconnect required".to_string())?;
+        .ok_or_else(|| {
+            "Access token expired and no refresh_token available — reconnect required".to_string()
+        })?;
 
     log::info!("[calendar] Access token near expiry; refreshing");
     let refreshed = oauth::refresh_access_token(refresh_token).await?;
 
+    let now = now_secs();
     let new_tokens = StoredTokens {
         access_token: refreshed.access_token.clone(),
         // Google often omits refresh_token on refresh — keep the old one.
@@ -64,6 +85,14 @@ pub async fn get_fresh_access_token<S: TokenStore>(
 
     store.save(key, &new_tokens).await?;
     Ok((new_tokens.access_token.clone(), new_tokens))
+}
+
+fn is_near_expiry(tokens: &StoredTokens) -> bool {
+    let now = now_secs();
+    tokens
+        .expires_at
+        .map(|t| now + REFRESH_LEEWAY_SECS >= t)
+        .unwrap_or(false)
 }
 
 /// Fetch the user's primary calendar metadata. Google returns the
@@ -90,11 +119,11 @@ pub async fn fetch_primary_calendar_email(access_token: &str) -> Result<String, 
         .map_err(|e| format!("Read primary calendar body failed: {e}"))?;
 
     if !status.is_success() {
-        return Err(format!("Fetch primary calendar returned {status}: {body}"));
+        return Err(format!("Fetch primary calendar returned {status}"));
     }
 
     let parsed: CalendarResource = serde_json::from_str(&body)
-        .map_err(|e| format!("Primary calendar response invalid JSON: {e}; body: {body}"))?;
+        .map_err(|_| format!("Primary calendar response malformed (status {status})"))?;
     Ok(parsed.id)
 }
 
@@ -131,11 +160,11 @@ pub async fn list_upcoming_events(
         .map_err(|e| format!("Read list events body failed: {e}"))?;
 
     if !status.is_success() {
-        return Err(format!("List events returned {status}: {body}"));
+        return Err(format!("List events returned {status}"));
     }
 
     let raw: RawEventsResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("List events response invalid JSON: {e}"))?;
+        .map_err(|_| format!("List events response malformed (status {status})"))?;
 
     let events = raw
         .items

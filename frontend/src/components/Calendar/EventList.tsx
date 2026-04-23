@@ -15,6 +15,9 @@ interface CalendarEventDto {
 }
 
 interface EventGroup {
+  /** Stable unique key for React, computed from the local date. */
+  dateKey: string;
+  /** Human-facing label — may repeat across groups (two "Monday"s). */
   label: string;
   events: CalendarEventDto[];
 }
@@ -31,25 +34,45 @@ function dayLabel(d: Date): string {
   return day.toLocaleDateString(undefined, { weekday: 'long' });
 }
 
+function dateKey(d: Date): string {
+  // Padded so lexicographic sort matches chronological.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function formatTimeRange(start: string, end: string): string {
   const s = new Date(start);
   const e = new Date(end);
   const fmt: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
-  return `${s.toLocaleTimeString(undefined, fmt)} – ${e.toLocaleTimeString(undefined, fmt)}`;
+  const startStr = s.toLocaleTimeString(undefined, fmt);
+  const endStr = e.toLocaleTimeString(undefined, fmt);
+  // Cross-day spans (e.g. 11:30 PM → 12:30 AM) need a cue so users
+  // don't misread the order.
+  const sameLocalDay =
+    s.getFullYear() === e.getFullYear() &&
+    s.getMonth() === e.getMonth() &&
+    s.getDate() === e.getDate();
+  return sameLocalDay ? `${startStr} – ${endStr}` : `${startStr} – ${endStr} (next day)`;
 }
 
 function groupByDay(events: CalendarEventDto[]): EventGroup[] {
   const groups = new Map<string, CalendarEventDto[]>();
+  const labels = new Map<string, string>();
   for (const ev of events) {
     const d = new Date(ev.start);
-    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(ev);
+    const key = dateKey(d);
+    const bucket = groups.get(key) ?? [];
+    bucket.push(ev);
+    groups.set(key, bucket);
+    if (!labels.has(key)) labels.set(key, dayLabel(d));
   }
-  return Array.from(groups.entries()).map(([key, evs]) => {
-    const [year, month, day] = key.split('-').map(Number);
-    return { label: dayLabel(new Date(year, month, day)), events: evs };
-  });
+  return Array.from(groups.entries()).map(([k, evs]) => ({
+    dateKey: k,
+    label: labels.get(k) ?? k,
+    events: evs,
+  }));
 }
 
 export function EventList() {
@@ -57,17 +80,25 @@ export function EventList() {
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const alive = useRef(true);
+  // Monotonic sequence so stale responses never overwrite fresh ones.
+  // A slow A that returns after a fast B must not replace B's data.
+  const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const mySeq = ++loadSeq.current;
     setIsRefreshing(true);
     setError(null);
     try {
       const result = await invoke<CalendarEventDto[]>('api_calendar_list_upcoming');
-      if (alive.current) setEvents(result);
+      if (!alive.current || mySeq !== loadSeq.current) return;
+      setEvents(result);
     } catch (err) {
-      if (alive.current) setError(err instanceof Error ? err.message : String(err));
+      if (!alive.current || mySeq !== loadSeq.current) return;
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (alive.current) setIsRefreshing(false);
+      if (alive.current && mySeq === loadSeq.current) {
+        setIsRefreshing(false);
+      }
     }
   }, []);
 
@@ -95,7 +126,8 @@ export function EventList() {
           <button
             type="button"
             onClick={load}
-            className="text-red-700 hover:text-red-900 underline underline-offset-2"
+            disabled={isRefreshing}
+            className="text-red-700 hover:text-red-900 underline underline-offset-2 disabled:opacity-50"
           >
             Retry
           </button>
@@ -129,7 +161,7 @@ export function EventList() {
         </div>
       ) : (
         groups.map((group) => (
-          <div key={group.label}>
+          <div key={group.dateKey}>
             <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
               {group.label}
             </h4>
@@ -137,7 +169,7 @@ export function EventList() {
               {group.events.map((ev) => (
                 <li
                   key={ev.id}
-                  className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm hover:border-gray-300 transition-colors"
+                  className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">

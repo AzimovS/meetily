@@ -14,18 +14,27 @@ export function ConnectCard() {
   const [isWorking, setIsWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
+  // Monotonically-incremented per status-changing action. Any in-flight
+  // response whose id doesn't match is stale and gets discarded. Fixes
+  // the disconnect-flickers-to-connected race.
+  const statusSeq = useRef(0);
+  // Synchronous guard against double-click: setState-driven `isWorking`
+  // doesn't flush until next render, so a fast second click can slip
+  // through. A ref is synchronous.
+  const connectInFlight = useRef(false);
 
   useEffect(() => {
     alive.current = true;
+    const myId = ++statusSeq.current;
     invoke<ConnectionStatus>('api_calendar_status')
       .then((result) => {
-        if (alive.current) setStatus(result);
+        if (!alive.current || myId !== statusSeq.current) return;
+        setStatus(result);
       })
       .catch((err) => {
-        if (alive.current) {
-          setStatus({ type: 'disconnected' });
-          setError(err instanceof Error ? err.message : String(err));
-        }
+        if (!alive.current || myId !== statusSeq.current) return;
+        setStatus({ type: 'disconnected' });
+        setError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       alive.current = false;
@@ -33,14 +42,20 @@ export function ConnectCard() {
   }, []);
 
   const handleConnect = async () => {
+    if (connectInFlight.current) return;
+    connectInFlight.current = true;
     setIsWorking(true);
     setError(null);
     try {
       const result = await invoke<ConnectionStatus>('api_calendar_connect');
+      // Authoritative state transition — bump seq so any older in-flight
+      // status query can't overwrite this.
+      statusSeq.current++;
       if (alive.current) setStatus(result);
     } catch (err) {
       if (alive.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
+      connectInFlight.current = false;
       if (alive.current) setIsWorking(false);
     }
   };
@@ -50,6 +65,7 @@ export function ConnectCard() {
     setError(null);
     try {
       await invoke('api_calendar_disconnect');
+      statusSeq.current++;
       if (alive.current) setStatus({ type: 'disconnected' });
     } catch (err) {
       if (alive.current) setError(err instanceof Error ? err.message : String(err));
