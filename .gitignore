@@ -29,6 +29,11 @@
 docs/plans/
 docs/brainstorms/
 
+# Google OAuth credentials for Meetily are supplied via env vars at build
+# time (MEETILY_GOOGLE_CLIENT_ID + MEETILY_GOOGLE_CLIENT_SECRET). Nothing
+# to ignore here — the values live in GitHub Actions secrets for releases
+# and in local shell exports or an uncommitted .cargo/config.toml for dev.
+
 # misc
 .DS_Store
 *.pem

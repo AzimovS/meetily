@@ -5,6 +5,10 @@ fn main() {
     // GPU Acceleration Detection and Build Guidance
     detect_and_report_gpu_capabilities();
 
+    // Bake Google OAuth credentials into the binary when provided at build
+    // time. See src/calendar/credentials.rs for the full story.
+    inject_calendar_credentials();
+
     #[cfg(target_os = "macos")]
     {
         println!("cargo:rustc-link-lib=framework=AVFoundation");
@@ -19,6 +23,26 @@ fn main() {
     ffmpeg::ensure_ffmpeg_binary();
 
     tauri_build::build()
+}
+
+/// Read Google OAuth credentials from the build environment and re-export
+/// them so Rust code can pick them up via `option_env!`. No-op when unset.
+///
+/// Google's Desktop OAuth flow, unlike the pure-public-client model of RFC
+/// 8252, requires BOTH PKCE and client_secret on token exchange. The
+/// client_secret is still not cryptographically secret (trivially
+/// extractable from any shipped binary) but Google's token endpoint
+/// rejects the request without it. See:
+/// https://developers.google.com/identity/protocols/oauth2/native-app
+fn inject_calendar_credentials() {
+    for var in ["MEETILY_GOOGLE_CLIENT_ID", "MEETILY_GOOGLE_CLIENT_SECRET"] {
+        println!("cargo:rerun-if-env-changed={var}");
+        if let Ok(v) = std::env::var(var) {
+            if !v.is_empty() {
+                println!("cargo:rustc-env={var}={v}");
+            }
+        }
+    }
 }
 
 /// Detects GPU acceleration capabilities and provides build guidance

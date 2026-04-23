@@ -78,6 +78,11 @@ const Sidebar: React.FC = () => {
   });
   const [settingsSaveSuccess, setSettingsSaveSuccess] = useState<boolean | null>(null);
   const [appVersion, setAppVersion] = useState<string>('');
+  // Gate beta-feature conditional renders until after mount, otherwise
+  // localStorage-backed flags can diverge from the statically exported
+  // HTML and trigger React hydration errors.
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => setHasMounted(true), []);
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(console.error);
@@ -449,6 +454,7 @@ const Sidebar: React.FC = () => {
     const isHomePage = pathname === '/';
     const isMeetingPage = pathname?.includes('/meeting-details');
     const isSettingsPage = pathname === '/settings';
+    const isCalendarPage = pathname === '/calendar';
 
     return (
       <TooltipProvider>
@@ -501,6 +507,25 @@ const Sidebar: React.FC = () => {
               </TooltipTrigger>
               <TooltipContent side="right">
                 <p>Import Audio</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+
+          {hasMounted && betaFeatures.calendarSync && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Calendar"
+                  onClick={() => router.push('/calendar')}
+                  className={`p-2 rounded-lg transition-colors duration-150 ${isCalendarPage ? 'bg-gray-100' : 'hover:bg-gray-100'
+                    }`}
+                >
+                  <Calendar className="w-5 h-5 text-gray-600" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                <p>Calendar</p>
               </TooltipContent>
             </Tooltip>
           )}
@@ -798,6 +823,17 @@ const Sidebar: React.FC = () => {
               >
                 <Upload className="w-4 h-4 mr-2" />
                 <span>Import Audio</span>
+              </button>
+            )}
+
+            {hasMounted && betaFeatures.calendarSync && (
+              <button
+                type="button"
+                onClick={() => router.push('/calendar')}
+                className="w-full flex items-center justify-center px-3 py-1.5 mt-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors shadow-sm"
+              >
+                <Calendar className="w-4 h-4 mr-2" />
+                <span>Calendar</span>
               </button>
             )}
 
