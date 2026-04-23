@@ -8,6 +8,7 @@
 pub mod commands;
 pub mod credentials;
 pub mod oauth;
+pub mod token_store;
 pub mod types;
 
 pub use commands::*;
