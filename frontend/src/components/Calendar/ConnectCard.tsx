@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Calendar as CalendarIcon, CheckCircle2 } from 'lucide-react';
+import { Calendar as CalendarIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { EventList } from './EventList';
 
 type ConnectionStatus =
   | { type: 'disconnected' }
@@ -59,39 +60,35 @@ export function ConnectCard() {
 
   if (status === null) {
     return (
-      <div className="bg-white border border-gray-200 rounded-xl p-8 max-w-lg mx-auto text-center shadow-sm">
-        <p className="text-gray-500">Loading…</p>
-      </div>
+      <div className="text-center py-12 text-gray-500 text-sm">Loading…</div>
     );
   }
 
   if (status.type === 'connected') {
     return (
-      <div className="bg-white border border-gray-200 rounded-xl p-8 max-w-lg mx-auto text-center shadow-sm">
-        <div className="w-16 h-16 mx-auto mb-4 bg-green-50 rounded-full flex items-center justify-center">
-          <CheckCircle2 className="w-8 h-8 text-green-600" />
+      <div className="space-y-6">
+        <div className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-2 h-2 rounded-full bg-green-500" />
+            <span className="text-sm text-gray-700">{status.email}</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleDisconnect}
+            disabled={isWorking}
+            className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
+          >
+            {isWorking ? 'Disconnecting…' : 'Disconnect'}
+          </button>
         </div>
-        <h2 className="text-xl font-semibold mb-2">Connected</h2>
-        <p className="text-gray-600 mb-6">{status.email}</p>
-
-        <button
-          type="button"
-          onClick={handleDisconnect}
-          disabled={isWorking}
-          className="inline-flex items-center justify-center px-5 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isWorking ? 'Disconnecting…' : 'Disconnect'}
-        </button>
 
         {error && (
-          <div className="mt-6 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 text-left">
+          <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">
             {error}
           </div>
         )}
 
-        <p className="text-xs text-gray-500 mt-6">
-          Event list lands in the next slice.
-        </p>
+        <EventList />
       </div>
     );
   }

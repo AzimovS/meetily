@@ -1,8 +1,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::calendar::api;
 use crate::calendar::oauth;
 use crate::calendar::token_store::{KeyringTokenStore, StoredTokens, TokenKey, TokenStore};
-use crate::calendar::types::ConnectionStatus;
+use crate::calendar::types::{CalendarEventDto, ConnectionStatus};
 
 /// Google's OAuth 2.0 token revocation endpoint (RFC 7009).
 const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
@@ -20,9 +21,8 @@ pub async fn api_calendar_status() -> Result<ConnectionStatus, String> {
 
 #[tauri::command]
 pub async fn api_calendar_connect() -> Result<ConnectionStatus, String> {
-    // Clear any prior tokens before starting a fresh consent — prevents
-    // stale state if the user re-connects after an error.
     let store = KeyringTokenStore;
+    // Clear any prior tokens before starting a fresh consent.
     store.delete(TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
 
     let tokens = oauth::connect().await?;
@@ -31,24 +31,33 @@ pub async fn api_calendar_connect() -> Result<ConnectionStatus, String> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let stored = StoredTokens {
+    let mut stored = StoredTokens {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_at: tokens.expires_in_secs.map(|s| now + s),
-        email: None, // Fetched on first Calendar API call in the next commit.
+        email: None,
     };
+
+    // Best-effort email fetch. We already have a valid access_token — one
+    // API call to /calendars/primary gives us the user's email. Failure
+    // is non-blocking: persist tokens without email, UI shows a
+    // placeholder "Connected" and we retry the fetch on next status.
+    match api::fetch_primary_calendar_email(&stored.access_token).await {
+        Ok(email) => {
+            log::info!("[calendar] Connected as {email}");
+            stored.email = Some(email);
+        }
+        Err(e) => {
+            log::warn!("[calendar] Email fetch failed during connect: {e}");
+        }
+    }
 
     store
         .save(TokenKey::GOOGLE_CALENDAR_DEFAULT, &stored)
         .await?;
 
-    log::info!(
-        "[calendar] Connected; tokens persisted (refresh_token present={})",
-        stored.refresh_token.is_some()
-    );
-
     Ok(ConnectionStatus::Connected {
-        email: "Connected".to_string(),
+        email: stored.email.unwrap_or_else(|| "Connected".to_string()),
     })
 }
 
@@ -56,12 +65,7 @@ pub async fn api_calendar_connect() -> Result<ConnectionStatus, String> {
 pub async fn api_calendar_disconnect() -> Result<(), String> {
     let store = KeyringTokenStore;
 
-    // Best-effort revoke against Google. We delete local tokens
-    // unconditionally even if revoke fails — a stale server-side grant
-    // is less dangerous than leaking tokens on a shared machine.
     if let Some(tokens) = store.load(TokenKey::GOOGLE_CALENDAR_DEFAULT).await? {
-        // Prefer the refresh_token (revokes the whole grant). Fall back
-        // to access_token if no refresh is stored.
         let token_to_revoke = tokens
             .refresh_token
             .as_deref()
@@ -95,7 +99,9 @@ pub async fn api_calendar_disconnect() -> Result<(), String> {
                 );
             }
             Err(e) => {
-                log::warn!("[calendar] Google revoke request failed: {e}; deleting local tokens anyway");
+                log::warn!(
+                    "[calendar] Google revoke request failed: {e}; deleting local tokens anyway"
+                );
             }
         }
     }
@@ -106,7 +112,9 @@ pub async fn api_calendar_disconnect() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn api_calendar_list_upcoming() -> Result<Vec<serde_json::Value>, String> {
-    // Lands in the next commit alongside the refresh-token helper.
-    Ok(Vec::new())
+pub async fn api_calendar_list_upcoming() -> Result<Vec<CalendarEventDto>, String> {
+    let store = KeyringTokenStore;
+    let (access_token, _tokens) =
+        api::get_fresh_access_token(&store, TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
+    api::list_upcoming_events(&access_token).await
 }

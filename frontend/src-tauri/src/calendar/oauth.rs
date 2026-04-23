@@ -50,6 +50,67 @@ struct TokenError {
     error_description: Option<String>,
 }
 
+/// Exchange a refresh_token for a fresh access_token. Google may or may
+/// not return a new refresh_token — the caller preserves the existing
+/// one if the response omits it.
+pub async fn refresh_access_token(refresh_token: &str) -> Result<Tokens, String> {
+    let client_id = credentials::client_id().ok_or_else(|| {
+        "Meetily was built without a Google OAuth client id.".to_string()
+    })?;
+    let client_secret = credentials::client_secret().ok_or_else(|| {
+        "Meetily was built without a Google OAuth client secret.".to_string()
+    })?;
+
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let form = [
+        ("client_id", client_id),
+        ("client_secret", client_secret),
+        ("refresh_token", refresh_token),
+        ("grant_type", "refresh_token"),
+    ];
+
+    let response = http
+        .post(TOKEN_URL)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|e| format!("Refresh request failed: {e}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read refresh response body: {e}"))?;
+
+    if !status.is_success() {
+        let detail = serde_json::from_str::<TokenError>(&body)
+            .map(|e| {
+                format!(
+                    "{}{}",
+                    e.error,
+                    e.error_description
+                        .map(|d| format!(" — {d}"))
+                        .unwrap_or_default()
+                )
+            })
+            .unwrap_or_else(|_| body.clone());
+        return Err(format!("refresh_failed:{status}:{detail}"));
+    }
+
+    let parsed: TokenResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("Refresh response not valid JSON: {e}; body: {body}"))?;
+
+    Ok(Tokens {
+        access_token: parsed.access_token,
+        refresh_token: parsed.refresh_token,
+        expires_in_secs: parsed.expires_in,
+    })
+}
+
 /// Run the full connect flow. Blocks until the user consents in their
 /// browser or the 120-second timeout elapses.
 pub async fn connect() -> Result<Tokens, String> {
