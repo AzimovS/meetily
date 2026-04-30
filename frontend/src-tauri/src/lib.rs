@@ -4,51 +4,109 @@ use std::sync::Mutex as StdMutex;
 
 /// Debug command to manually test updater connectivity and version comparison.
 /// Bypasses the Tauri updater plugin entirely to diagnose issues.
+///
+/// Keep this endpoint list in sync with `tauri.conf.json`'s
+/// `plugins.updater.endpoints` — drift makes the report misleading.
 #[tauri::command]
 async fn debug_check_update() -> Result<String, String> {
-    let url = "https://github.com/AzimovS/meetily/releases/latest/download/latest.json";
+    const ENDPOINTS: &[(&str, &str)] = &[
+        (
+            "S3 (primary)",
+            "https://s3-dcl1.ethquokkaops.io/automation-public/meetily-updates/latest.json",
+        ),
+        (
+            "AzimovS GitHub Releases (fallback)",
+            "https://github.com/AzimovS/meetily/releases/latest/download/latest.json",
+        ),
+    ];
     let current_version = env!("CARGO_PKG_VERSION");
 
-    let mut report = format!("=== Updater Debug Report ===\n");
-    report.push_str(&format!("Compiled version: {}\n", current_version));
-    report.push_str(&format!("Endpoint: {}\n\n", url));
-
-    // Step 1: Fetch latest.json
     let client = reqwest::Client::builder()
         .user_agent("tauri-plugin-updater/debug")
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    let response = client.get(url).send().await
-        .map_err(|e| format!("HTTP request FAILED: {} (this means network is blocked or endpoint unreachable)", e))?;
+    let mut report = format!("=== Updater Debug Report ===\n");
+    report.push_str(&format!("Compiled version: {}\n", current_version));
+    report.push_str(&format!("Endpoints to probe: {}\n", ENDPOINTS.len()));
+
+    for &(label, url) in ENDPOINTS {
+        report.push_str(&format!("\n--- {} ---\n", label));
+        report.push_str(&format!("URL: {}\n", url));
+        probe_endpoint(&client, url, current_version, &mut report).await;
+    }
+
+    Ok(report)
+}
+
+async fn probe_endpoint(
+    client: &reqwest::Client,
+    url: &str,
+    current_version: &str,
+    report: &mut String,
+) {
+    // Step 1: Fetch latest.json
+    let response = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            report.push_str(&format!(
+                "HTTP request FAILED: {} (network blocked or endpoint unreachable)\n",
+                e
+            ));
+            return;
+        }
+    };
 
     let status = response.status();
     report.push_str(&format!("HTTP status: {}\n", status));
 
     if !status.is_success() {
-        report.push_str(&format!("ERROR: Non-success status. Body: {}\n",
-            response.text().await.unwrap_or_default()));
-        return Ok(report);
+        report.push_str(&format!(
+            "ERROR: Non-success status. Body: {}\n",
+            response.text().await.unwrap_or_default()
+        ));
+        return;
     }
 
-    let body = response.text().await
-        .map_err(|e| format!("Failed to read response body: {}", e))?;
+    let body = match response.text().await {
+        Ok(b) => b,
+        Err(e) => {
+            report.push_str(&format!("Failed to read response body: {}\n", e));
+            return;
+        }
+    };
 
     // Step 2: Parse JSON
-    let json: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse JSON: {}. Body: {}", e, &body[..200.min(body.len())]))?;
+    let json: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            report.push_str(&format!(
+                "Failed to parse JSON: {}. Body: {}\n",
+                e,
+                &body[..200.min(body.len())]
+            ));
+            return;
+        }
+    };
 
     let remote_version = json["version"].as_str().unwrap_or("MISSING");
     report.push_str(&format!("Remote version: {}\n", remote_version));
 
     // Step 3: Check platforms
     if let Some(platforms) = json["platforms"].as_object() {
-        report.push_str(&format!("Platforms: {:?}\n", platforms.keys().collect::<Vec<_>>()));
+        report.push_str(&format!(
+            "Platforms: {:?}\n",
+            platforms.keys().collect::<Vec<_>>()
+        ));
         if let Some(darwin) = platforms.get("darwin-aarch64") {
-            report.push_str(&format!("darwin-aarch64 URL: {}\n",
-                darwin["url"].as_str().unwrap_or("MISSING")));
-            report.push_str(&format!("darwin-aarch64 sig length: {}\n",
-                darwin["signature"].as_str().map(|s| s.len()).unwrap_or(0)));
+            report.push_str(&format!(
+                "darwin-aarch64 URL: {}\n",
+                darwin["url"].as_str().unwrap_or("MISSING")
+            ));
+            report.push_str(&format!(
+                "darwin-aarch64 sig length: {}\n",
+                darwin["signature"].as_str().map(|s| s.len()).unwrap_or(0)
+            ));
         } else {
             report.push_str("ERROR: darwin-aarch64 platform MISSING\n");
         }
@@ -58,10 +116,14 @@ async fn debug_check_update() -> Result<String, String> {
 
     // Step 4: Version comparison
     let remote_clean = remote_version.trim_start_matches('v');
-    report.push_str(&format!("\nVersion comparison: {} (remote) vs {} (current)\n", remote_clean, current_version));
-    report.push_str(&format!("Update available: {}\n", remote_clean != current_version && remote_clean > current_version));
-
-    Ok(report)
+    report.push_str(&format!(
+        "Version comparison: {} (remote) vs {} (current)\n",
+        remote_clean, current_version
+    ));
+    report.push_str(&format!(
+        "Update available: {}\n",
+        remote_clean != current_version && remote_clean > current_version
+    ));
 }
 // Removed unused import
 

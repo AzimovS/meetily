@@ -119,6 +119,7 @@
         "updater": {
             "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM4QkU1NDdCNTk5NURGMUUKUldRZTM1VlplMVMrT09KQk1XeSt2N2dWQUVJNkxqdkpFVEpNY3EwNnRjQ2xNcUU5M0g5UDdiVHYK",
             "endpoints": [
+                "https://s3-dcl1.ethquokkaops.io/automation-public/meetily-updates/latest.json",
                 "https://github.com/AzimovS/meetily/releases/latest/download/latest.json"
             ]
         }

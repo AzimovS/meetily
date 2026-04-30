@@ -61,6 +61,15 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
+      - name: Verify required macOS entitlements
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if ! grep -q "com.apple.security.network.client" frontend/src-tauri/entitlements.plist; then
+            echo "::error::Missing com.apple.security.network.client entitlement — updater will silently fail (hardened runtime blocks HTTP from Rust)"
+            exit 1
+          fi
+
       - name: Get version from tauri.conf.json.
         id: get-version
         shell: bash
