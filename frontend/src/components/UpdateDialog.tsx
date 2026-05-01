@@ -9,7 +9,11 @@ import {
   DialogTitle,
 } from './ui/dialog';
 import { Button } from './ui/button';
-import { updateService, UpdateInfo, UpdateProgress } from '@/services/updateService';
+import {
+  formatUpdaterError,
+  UpdateInfo,
+  UpdateProgress,
+} from '@/services/updateService';
 import { check, Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { toast } from 'sonner';
@@ -41,8 +45,9 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
           setError('Update no longer available');
         }
       }).catch((err) => {
+        const message = formatUpdaterError(err);
         console.error('Failed to get update object:', err);
-        setError('Failed to prepare update: ' + (err.message || 'Unknown error'));
+        setError(`Failed to prepare update: ${message}`);
       });
     } else {
       // Reset state when dialog closes
@@ -66,8 +71,8 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
           setError('Update not available');
           return;
         }
-      } catch (err: any) {
-        setError('Failed to get update: ' + (err.message || 'Unknown error'));
+      } catch (err: unknown) {
+        setError(`Failed to get update: ${formatUpdaterError(err)}`);
         return;
       }
     }
@@ -133,11 +138,12 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
 
       // Relaunch the app
       await relaunch();
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = formatUpdaterError(err);
       console.error('Update failed:', err);
-      setError(err.message || 'Failed to download or install update');
+      setError(`Failed to download or install update: ${message}`);
       setIsDownloading(false);
-      toast.error('Update failed: ' + (err.message || 'Unknown error'));
+      toast.error(`Update failed: ${message}`);
     }
   };
 
@@ -208,7 +214,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
             {isDownloading
               ? 'Downloading the latest version...'
               : error
-              ? 'An error occurred while updating'
+              ? 'The update could not be completed. Details are shown below.'
               : `A new version (${updateInfo.version}) is available`}
           </DialogDescription>
         </DialogHeader>
@@ -268,8 +274,11 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
           )}
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-              <p className="text-sm text-red-800">{error}</p>
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+              <p className="text-sm font-medium text-red-900">Update failed</p>
+              <p className="mt-1 whitespace-pre-wrap break-words text-sm text-red-800">
+                Reason: {error}
+              </p>
             </div>
           )}
         </div>

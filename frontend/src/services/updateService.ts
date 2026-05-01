@@ -24,6 +24,33 @@ export interface UpdateProgress {
   percentage: number;
 }
 
+export function formatUpdaterError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  if (error && typeof error === 'object') {
+    const payload = error as Record<string, unknown>;
+    const message = payload.message ?? payload.error ?? payload.reason;
+
+    if (typeof message === 'string') {
+      return message;
+    }
+
+    try {
+      return JSON.stringify(payload);
+    } catch {
+      return String(error);
+    }
+  }
+
+  return 'Unknown error';
+}
+
 /**
  * Update Service
  * Singleton service for managing app updates
