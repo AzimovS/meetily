@@ -151,10 +151,24 @@ pub async fn connect() -> Result<Tokens, String> {
     );
 
     // 5. Wait for the browser to redirect back to loopback.
-    let (code, returned_state) = timeout(CONSENT_TIMEOUT, wait_for_callback(&listener))
+    let outcome = timeout(CONSENT_TIMEOUT, wait_for_callback(&listener))
         .await
         .map_err(|_| "OAuth consent timed out after 120 seconds".to_string())?
         .map_err(|e| format!("Loopback callback failed: {e}"))?;
+
+    let (code, returned_state) = match outcome {
+        CallbackOutcome::Success { code, state } => (code, state),
+        CallbackOutcome::Denied { error, description } => {
+            let detail = description
+                .filter(|d| !d.is_empty())
+                .map(|d| format!(" — {d}"))
+                .unwrap_or_default();
+            return Err(format!("OAuth consent declined ({error}){detail}"));
+        }
+        CallbackOutcome::Missing { .. } => {
+            return Err("OAuth callback returned no authorization code".to_string());
+        }
+    };
 
     // 6. CSRF check.
     if returned_state != csrf_state {
@@ -280,9 +294,63 @@ fn urlencode(s: &str) -> String {
     out
 }
 
+/// Outcome of the loopback OAuth callback. Surfaces consent denial as
+/// a distinct case so we don't render a success page when Google
+/// actually returned `error=access_denied`.
+#[derive(Debug, PartialEq)]
+enum CallbackOutcome {
+    Success {
+        code: String,
+        state: String,
+    },
+    /// User clicked "Cancel" on the Google consent screen, or Google
+    /// returned an error (e.g. `access_denied`, `invalid_scope`).
+    Denied {
+        error: String,
+        description: Option<String>,
+    },
+    /// No `error` and no `code` — typically a stray request to the
+    /// loopback port, or a misconfigured Google Cloud client.
+    Missing {
+        state: String,
+    },
+}
+
+/// Pure parser for the loopback callback query string. Split out from
+/// the I/O wrapper so the success/denied/missing branches are unit-testable.
+fn parse_callback_query(query: &str) -> CallbackOutcome {
+    let mut code = String::new();
+    let mut state = String::new();
+    let mut error = String::new();
+    let mut description: Option<String> = None;
+    for pair in query.split('&') {
+        let mut kv = pair.splitn(2, '=');
+        let k = kv.next().unwrap_or("");
+        let v = kv.next().unwrap_or("");
+        let decoded = urldecode(v);
+        match k {
+            "code" => code = decoded,
+            "state" => state = decoded,
+            "error" => error = decoded,
+            "error_description" => description = Some(decoded),
+            _ => {}
+        }
+    }
+
+    if !error.is_empty() {
+        return CallbackOutcome::Denied { error, description };
+    }
+    if code.is_empty() {
+        return CallbackOutcome::Missing { state };
+    }
+    CallbackOutcome::Success { code, state }
+}
+
 /// Accept one incoming HTTP GET on the loopback listener, parse the
-/// `code` and `state` query params, and return them.
-async fn wait_for_callback(listener: &TcpListener) -> std::io::Result<(String, String)> {
+/// callback query, and render an appropriate HTML response back to
+/// the browser tab. Returns the parsed outcome to the caller, who
+/// decides whether to attempt a token exchange.
+async fn wait_for_callback(listener: &TcpListener) -> std::io::Result<CallbackOutcome> {
     let (mut socket, _) = listener.accept().await?;
 
     let (reader, mut writer) = socket.split();
@@ -292,20 +360,7 @@ async fn wait_for_callback(listener: &TcpListener) -> std::io::Result<(String, S
 
     let path = request_line.split_whitespace().nth(1).unwrap_or("");
     let query = path.split('?').nth(1).unwrap_or("");
-
-    let mut code = String::new();
-    let mut state = String::new();
-    for pair in query.split('&') {
-        let mut kv = pair.splitn(2, '=');
-        let k = kv.next().unwrap_or("");
-        let v = kv.next().unwrap_or("");
-        let decoded = urldecode(v);
-        match k {
-            "code" => code = decoded,
-            "state" => state = decoded,
-            _ => {}
-        }
-    }
+    let outcome = parse_callback_query(query);
 
     // Drain remaining headers so the client doesn't hang.
     let mut line = String::new();
@@ -317,11 +372,46 @@ async fn wait_for_callback(listener: &TcpListener) -> std::io::Result<(String, S
         }
     }
 
-    let body = r#"<!doctype html><html><head><meta charset="utf-8"><title>Meetily</title></head>
+    let body = match &outcome {
+        CallbackOutcome::Success { .. } => {
+            r#"<!doctype html><html><head><meta charset="utf-8"><title>Meetily</title></head>
 <body style="font-family:system-ui,sans-serif;text-align:center;padding-top:80px;color:#111;">
 <h1>Meetily connected to Google Calendar</h1>
 <p>You can close this tab and return to the app.</p>
-</body></html>"#;
+</body></html>"#
+                .to_string()
+        }
+        CallbackOutcome::Denied { error, description } => {
+            // Show the user the same error the Rust side will surface,
+            // so the browser tab and the in-app toast tell a consistent
+            // story. Both fields are pre-encoded by Google as URL-safe
+            // ASCII; html-escape just `<`/`>`/`&` defensively.
+            let detail = description
+                .as_deref()
+                .filter(|d| !d.is_empty())
+                .map(|d| format!("<p>{}</p>", html_escape(d)))
+                .unwrap_or_default();
+            format!(
+                r#"<!doctype html><html><head><meta charset="utf-8"><title>Meetily</title></head>
+<body style="font-family:system-ui,sans-serif;text-align:center;padding-top:80px;color:#111;">
+<h1>Connection not completed</h1>
+<p>Google reported: <code>{}</code></p>
+{}
+<p>You can close this tab and return to the app to try again.</p>
+</body></html>"#,
+                html_escape(error),
+                detail
+            )
+        }
+        CallbackOutcome::Missing { .. } => {
+            r#"<!doctype html><html><head><meta charset="utf-8"><title>Meetily</title></head>
+<body style="font-family:system-ui,sans-serif;text-align:center;padding-top:80px;color:#111;">
+<h1>Connection not completed</h1>
+<p>The callback returned no authorization code. Please try again from the app.</p>
+</body></html>"#
+                .to_string()
+        }
+    };
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
@@ -330,7 +420,13 @@ async fn wait_for_callback(listener: &TcpListener) -> std::io::Result<(String, S
     let _ = writer.write_all(response.as_bytes()).await;
     let _ = writer.flush().await;
 
-    Ok((code, state))
+    Ok(outcome)
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn urldecode(s: &str) -> String {
@@ -361,5 +457,76 @@ fn hex(b: u8) -> Option<u8> {
         b'a'..=b'f' => Some(b - b'a' + 10),
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_success_callback() {
+        let outcome = parse_callback_query("code=4%2F0Adeu5BX&state=abc123&scope=calendar");
+        assert_eq!(
+            outcome,
+            CallbackOutcome::Success {
+                code: "4/0Adeu5BX".to_string(),
+                state: "abc123".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_denied_callback_uses_error_arm() {
+        let outcome = parse_callback_query(
+            "error=access_denied&error_description=The+user+denied+the+request&state=abc",
+        );
+        assert_eq!(
+            outcome,
+            CallbackOutcome::Denied {
+                error: "access_denied".to_string(),
+                description: Some("The user denied the request".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_denied_with_only_error_no_description() {
+        let outcome = parse_callback_query("error=invalid_scope&state=abc");
+        assert_eq!(
+            outcome,
+            CallbackOutcome::Denied {
+                error: "invalid_scope".to_string(),
+                description: None,
+            }
+        );
+    }
+
+    /// Defense-in-depth: `error` wins even if Google somehow includes a
+    /// stray `code` field. Prevents a malicious response with both
+    /// fields from sliding into the success arm.
+    #[test]
+    fn parse_treats_error_as_authoritative_when_both_present() {
+        let outcome = parse_callback_query("code=foo&error=access_denied&state=abc");
+        assert!(matches!(outcome, CallbackOutcome::Denied { .. }));
+    }
+
+    #[test]
+    fn parse_missing_when_neither_code_nor_error_present() {
+        let outcome = parse_callback_query("state=abc&scope=calendar");
+        assert_eq!(
+            outcome,
+            CallbackOutcome::Missing {
+                state: "abc".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_empty_query_yields_missing() {
+        assert!(matches!(
+            parse_callback_query(""),
+            CallbackOutcome::Missing { .. }
+        ));
     }
 }
