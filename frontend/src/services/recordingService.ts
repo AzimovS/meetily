@@ -71,11 +71,16 @@ export class RecordingService {
     systemDeviceName: string | null,
     meetingName: string
   ): Promise<void> {
-    return invoke('start_recording_with_devices_and_meeting', {
+    await invoke('start_recording_with_devices_and_meeting', {
       mic_device_name: micDeviceName,
       system_device_name: systemDeviceName,
       meeting_name: meetingName
     });
+    // Stamp the wall-clock recording start so useRecordingStop can hand
+    // it to api_calendar_auto_match_and_link. Centralized here so every
+    // start path (manual, auto-start-from-navigation, sidebar direct
+    // start) gets it without each caller having to remember.
+    sessionStorage.setItem('last_recording_start_iso', new Date().toISOString());
   }
 
   /**
