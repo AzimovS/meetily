@@ -1059,9 +1059,12 @@ pub async fn open_meeting_folder<R: Runtime>(
 
     let pool = state.db_manager.pool();
 
-    // Get meeting with folder_path
+    // Get meeting with folder_path. Must SELECT every column the
+    // FromRow derive on MeetingModel expects — including
+    // `calendar_context_json` added in 20260504000000.
     let meeting: Option<MeetingModel> = sqlx::query_as(
-        "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?",
+        "SELECT id, title, created_at, updated_at, folder_path, calendar_context_json \
+         FROM meetings WHERE id = ?",
     )
     .bind(&meeting_id)
     .fetch_optional(pool)

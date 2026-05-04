@@ -1,0 +1,25 @@
+-- Add calendar_context_json column to meetings.
+--
+-- Stores a frozen-at-link-time snapshot of a Google Calendar event
+-- (FrozenCalendarContext serde struct, schema_version=1). The summary
+-- pipeline reads this column to render the <meeting_context> block
+-- alongside the existing <transcript> and <user_context> blocks.
+--
+-- This migration deliberately uses plain ADD COLUMN rather than the
+-- table-recreation pattern called out in CLAUDE.md, because:
+--   1. `meetings` is the central FK target (transcripts,
+--      summary_processes, meeting_notes all CASCADE-reference it).
+--      Table recreation requires enumerating every column added by
+--      every prior migration; missing one silently erases that
+--      column's data.
+--   2. There is working precedent on this exact table:
+--      20251006000000_add_audio_sync_fields.sql added `folder_path`
+--      via plain ADD COLUMN.
+--   3. sqlx tracks migration checksums in _sqlx_migrations; re-running
+--      on a later launch is a framework-level no-op regardless of
+--      SQL idempotency.
+--   4. The column is nullable — no row data is rewritten, no existing
+--      column is touched, and `folder_path` is preserved by
+--      construction.
+
+ALTER TABLE meetings ADD COLUMN calendar_context_json TEXT;

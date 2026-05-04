@@ -60,12 +60,17 @@ impl MeetingsRepository {
         let mut conn = pool.acquire().await?;
         let mut transaction = conn.begin().await?;
 
-        // Get meeting details
-        let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?")
-                .bind(meeting_id)
-                .fetch_optional(&mut *transaction)
-                .await?;
+        // Get meeting details. Must SELECT every column the FromRow
+        // derive on MeetingModel expects — the derive errors with
+        // ColumnNotFound on a missing column even when the field type
+        // is Option<String>.
+        let meeting: Option<MeetingModel> = sqlx::query_as(
+            "SELECT id, title, created_at, updated_at, folder_path, calendar_context_json \
+             FROM meetings WHERE id = ?",
+        )
+        .bind(meeting_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
 
         if meeting.is_none() {
             transaction.rollback().await?;
@@ -120,11 +125,13 @@ impl MeetingsRepository {
             ));
         }
 
-        let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?")
-                .bind(meeting_id)
-                .fetch_optional(pool)
-                .await?;
+        let meeting: Option<MeetingModel> = sqlx::query_as(
+            "SELECT id, title, created_at, updated_at, folder_path, calendar_context_json \
+             FROM meetings WHERE id = ?",
+        )
+        .bind(meeting_id)
+        .fetch_optional(pool)
+        .await?;
 
         Ok(meeting)
     }
