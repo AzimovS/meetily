@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
@@ -296,6 +297,42 @@ export function useRecordingStop(
           console.log('✅ Successfully saved COMPLETE meeting with ID:', meetingId);
           console.log('   Transcripts:', freshTranscripts.length);
           console.log('   folder_path:', folderPath);
+
+          // Auto-match the recording window against the user's
+          // upcoming calendar events. Returns Ok(matched: None) for
+          // every fall-through (disconnected, no overlap, network
+          // error) so this is fire-and-forget from the user's
+          // perspective. The card on the meeting detail page renders
+          // the result on next mount.
+          const startIso = sessionStorage.getItem('last_recording_start_iso');
+          if (startIso) {
+            const endIso = new Date().toISOString();
+            try {
+              const outcome = await invoke<{
+                matched: { event_id: string; title: string } | null;
+                renamed_meeting: boolean;
+              }>('api_calendar_auto_match_and_link', {
+                meetingId,
+                startIso,
+                endIso,
+              });
+              if (outcome.matched) {
+                console.log('✅ Auto-linked to calendar event:', outcome.matched.title);
+                toast.success(`Linked to "${outcome.matched.title}"`, {
+                  description: outcome.renamed_meeting
+                    ? 'Meeting renamed and calendar context attached.'
+                    : 'Calendar context attached to summary.',
+                  duration: 4000,
+                });
+              }
+            } catch (matchErr) {
+              // The Rust command swallows most failures into Ok(None);
+              // an Err here is something genuinely unexpected (e.g.
+              // malformed timestamp). Log and proceed.
+              console.warn('Calendar auto-match failed:', matchErr);
+            }
+            sessionStorage.removeItem('last_recording_start_iso');
+          }
 
           // Mark meeting as saved in IndexedDB (for recovery system)
           await markMeetingAsSaved();

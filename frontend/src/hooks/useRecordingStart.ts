@@ -117,6 +117,11 @@ export function useRecordingStart(
         selectedDevices?.systemDevice || null,
         randomTitle
       );
+      // Stamp the wall-clock recording start time so the stop hook
+      // can hand it to api_calendar_auto_match_and_link. Capturing on
+      // the JS side here is close enough to the audio-pipeline start
+      // for calendar matching (events are minute-resolution).
+      sessionStorage.setItem('last_recording_start_iso', new Date().toISOString());
       console.log('Backend recording started successfully');
 
       // Update state after successful backend start
@@ -183,6 +188,8 @@ export function useRecordingStart(
               selectedDevices?.systemDevice || null,
               generatedMeetingTitle
             );
+            // Stamp recording start (see manual branch).
+            sessionStorage.setItem('last_recording_start_iso', new Date().toISOString());
             console.log('Auto-start backend recording result:', result);
 
             // Update UI state after successful backend start
