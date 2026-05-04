@@ -1,3 +1,5 @@
+use crate::calendar::prompt::render_meeting_context_block;
+use crate::calendar::types::FrozenCalendarContext;
 use crate::summary::llm_client::{generate_summary, LLMProvider};
 use crate::summary::templates;
 use once_cell::sync::Lazy;
@@ -172,6 +174,7 @@ pub async fn generate_meeting_summary(
     top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
+    calendar_context: Option<&FrozenCalendarContext>,
 ) -> Result<(String, i64), String> {
     // Check cancellation at the start
     if let Some(token) = cancellation_token {
@@ -376,6 +379,16 @@ PRIORITIZE: proposals ("I think we should..."), dates/deadlines/numbers, disagre
         final_user_prompt.push_str("\n\nUser Provided Context:\n\n<user_context>\n");
         final_user_prompt.push_str(custom_prompt);
         final_user_prompt.push_str("\n</user_context>");
+    }
+
+    // Append the calendar `<meeting_context>` block when an event is
+    // linked to this meeting. The block is omitted entirely when
+    // `calendar_context` is None — the prompt is byte-identical to
+    // the no-calendar baseline. `include_description` defaults to
+    // true; the user-facing privacy toggle for it lands with the
+    // settings panel later.
+    if let Some(ctx) = calendar_context {
+        final_user_prompt.push_str(&render_meeting_context_block(ctx, true));
     }
 
     // Check cancellation before final summary generation

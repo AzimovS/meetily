@@ -1,3 +1,4 @@
+use crate::calendar::repository as calendar_repo;
 use crate::database::repositories::{
     meeting::MeetingsRepository, setting::SettingsRepository, summary::SummaryProcessesRepository,
 };
@@ -219,6 +220,23 @@ impl SummaryService {
         // Get app data directory for BuiltInAI provider
         let app_data_dir = _app.path().app_data_dir().ok();
 
+        // Load any frozen calendar context for this meeting. Errors
+        // are non-fatal — we log and proceed with the no-context
+        // prompt so a corrupt or stale blob can never block summary
+        // generation.
+        let calendar_context = match calendar_repo::load_context(&pool, &meeting_id).await {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                warn!(
+                    "Failed to load calendar context for {meeting_id}: {e}; proceeding without"
+                );
+                None
+            }
+        };
+        if calendar_context.is_some() {
+            info!("✓ Including calendar context in summary prompt for {meeting_id}");
+        }
+
         // Generate summary
         let client = reqwest::Client::new();
         let result = generate_meeting_summary(
@@ -237,6 +255,7 @@ impl SummaryService {
             custom_openai_top_p,
             app_data_dir.as_ref(),
             Some(&cancellation_token),
+            calendar_context.as_ref(),
         )
         .await;
 

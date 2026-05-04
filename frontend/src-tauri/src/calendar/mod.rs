@@ -9,6 +9,7 @@ pub mod api;
 pub mod commands;
 pub mod credentials;
 pub mod oauth;
+pub mod prompt;
 pub mod repository;
 pub mod token_store;
 pub mod types;
