@@ -207,6 +207,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # License validation RSA public key (embedded at build time)
           MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
+          # Google OAuth credentials for Calendar integration (embedded at build time).
+          # Empty when the secret is unset → Calendar reports "not configured" at connect.
+          MEETILY_GOOGLE_CLIENT_ID: ${{ secrets.MEETILY_GOOGLE_CLIENT_ID }}
+          MEETILY_GOOGLE_CLIENT_SECRET: ${{ secrets.MEETILY_GOOGLE_CLIENT_SECRET }}
           # Supabase configuration (for online license verification)
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
