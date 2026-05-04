@@ -1,37 +1,38 @@
-//! Persistent storage for OAuth tokens.
+//! OAuth token persistence as JSON files in the per-user app data
+//! dir, one file per (provider, account) pair so future multi-account
+//! integrations slot in cleanly.
 //!
-//! Tokens live in the OS keychain via the `keyring` crate (Keychain on
-//! macOS, Credential Manager on Windows, Secret Service on GNOME/KDE).
-//! Never in SQLite, never in a config file.
+//! Path: `<app_data_dir>/<provider>.<account>.json`. The dir comes
+//! from Tauri's `app.path().app_data_dir()` and is stashed in
+//! `APP_DATA_DIR` during `setup()`. Reading before init returns Err.
 //!
-//! The `keyring` crate is synchronous and can block for seconds on user
-//! prompts (macOS "Meetily wants to access the keychain"), so all calls
-//! are wrapped in `tokio::task::spawn_blocking` to avoid stalling the
-//! Tokio runtime.
+//! Writes are atomic via tempfile + rename. On Unix the file mode is
+//! set to `0600` after write.
 
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::task::spawn_blocking;
+use tokio::fs;
 
-/// OAuth tokens and associated account metadata persisted together.
+static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Idempotent. Call once from Tauri `setup()`.
+pub fn init_app_data_dir(dir: PathBuf) {
+    let _ = APP_DATA_DIR.set(dir);
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredTokens {
     pub access_token: String,
     pub refresh_token: Option<String>,
-    /// Unix timestamp (seconds) when the access token expires. `None`
-    /// when the provider did not supply `expires_in`.
+    /// Unix seconds. `None` when the provider omitted `expires_in`.
     pub expires_at: Option<u64>,
-    /// The account email we associate these tokens with. Populated
-    /// after the first successful call to the Calendar API. May be
-    /// `None` immediately after connect — in that case the UI shows
-    /// "Connected" without an email until we backfill.
+    /// Backfilled after the first Calendar API call.
     pub email: Option<String>,
 }
 
-/// Identifies a (provider, account) slot in the keychain. Future
-/// multi-account support extends the `account` field beyond "default".
 #[derive(Debug, Clone, Copy)]
 pub struct TokenKey {
     pub provider: &'static str,
@@ -52,59 +53,73 @@ pub trait TokenStore: Send + Sync {
     async fn delete(&self, key: TokenKey) -> Result<(), String>;
 }
 
-/// Production token store backed by the OS keychain.
-pub struct KeyringTokenStore;
+pub struct FileTokenStore;
 
-#[async_trait]
-impl TokenStore for KeyringTokenStore {
-    async fn save(&self, key: TokenKey, tokens: &StoredTokens) -> Result<(), String> {
-        let payload = serde_json::to_string(tokens)
-            .map_err(|e| format!("Failed to serialize tokens: {e}"))?;
-        spawn_blocking(move || {
-            let entry = keyring::Entry::new(key.provider, key.account)
-                .map_err(|e| format!("Keyring entry error: {e}"))?;
-            entry
-                .set_password(&payload)
-                .map_err(|e| format!("Keyring save error: {e}"))
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking failure: {e}"))?
-    }
-
-    async fn load(&self, key: TokenKey) -> Result<Option<StoredTokens>, String> {
-        spawn_blocking(move || {
-            let entry = keyring::Entry::new(key.provider, key.account)
-                .map_err(|e| format!("Keyring entry error: {e}"))?;
-            match entry.get_password() {
-                Ok(raw) => serde_json::from_str::<StoredTokens>(&raw)
-                    .map(Some)
-                    .map_err(|e| format!("Failed to deserialize tokens: {e}")),
-                Err(keyring::Error::NoEntry) => Ok(None),
-                Err(e) => Err(format!("Keyring load error: {e}")),
-            }
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking failure: {e}"))?
-    }
-
-    async fn delete(&self, key: TokenKey) -> Result<(), String> {
-        spawn_blocking(move || {
-            let entry = keyring::Entry::new(key.provider, key.account)
-                .map_err(|e| format!("Keyring entry error: {e}"))?;
-            match entry.delete_credential() {
-                Ok(()) => Ok(()),
-                // Treat "no entry" as success — the post-condition is the
-                // same whether we actively deleted or it was already gone.
-                Err(keyring::Error::NoEntry) => Ok(()),
-                Err(e) => Err(format!("Keyring delete error: {e}")),
-            }
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking failure: {e}"))?
+impl FileTokenStore {
+    fn path_for(key: TokenKey) -> Result<PathBuf, String> {
+        let dir = APP_DATA_DIR
+            .get()
+            .ok_or_else(|| "Token store not initialized".to_string())?;
+        Ok(dir.join(format!("{}.{}.json", key.provider, key.account)))
     }
 }
 
-/// In-memory token store for tests. Never touches the OS.
+#[async_trait]
+impl TokenStore for FileTokenStore {
+    async fn save(&self, key: TokenKey, tokens: &StoredTokens) -> Result<(), String> {
+        let path = FileTokenStore::path_for(key)?;
+        let payload = serde_json::to_string(tokens)
+            .map_err(|e| format!("Failed to serialize tokens: {e}"))?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create token dir: {e}"))?;
+        }
+        // Atomic: write tmp, chmod, rename. A crash mid-write never
+        // leaves partial JSON in `path`.
+        let tmp_path = path.with_extension("json.tmp");
+        fs::write(&tmp_path, &payload)
+            .await
+            .map_err(|e| format!("Failed to write token file: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&tmp_path)
+                .map_err(|e| format!("Failed to stat token file: {e}"))?
+                .permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(&tmp_path, perms)
+                .map_err(|e| format!("Failed to chmod token file: {e}"))?;
+        }
+        fs::rename(&tmp_path, &path)
+            .await
+            .map_err(|e| format!("Failed to commit token file: {e}"))?;
+        Ok(())
+    }
+
+    async fn load(&self, key: TokenKey) -> Result<Option<StoredTokens>, String> {
+        let path = FileTokenStore::path_for(key)?;
+        match fs::read_to_string(&path).await {
+            Ok(raw) => serde_json::from_str::<StoredTokens>(&raw)
+                .map(Some)
+                .map_err(|e| format!("Failed to deserialize tokens: {e}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("Failed to read token file: {e}")),
+        }
+    }
+
+    async fn delete(&self, key: TokenKey) -> Result<(), String> {
+        let path = FileTokenStore::path_for(key)?;
+        match fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            // NotFound counts as success — same post-condition.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("Failed to delete token file: {e}")),
+        }
+    }
+}
+
+/// In-memory token store for tests.
 #[allow(dead_code)]
 pub struct InMemoryTokenStore {
     inner: Mutex<std::collections::HashMap<(&'static str, &'static str), StoredTokens>>,

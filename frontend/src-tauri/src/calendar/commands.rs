@@ -6,7 +6,7 @@ use crate::calendar::api;
 use crate::calendar::matching;
 use crate::calendar::oauth;
 use crate::calendar::repository;
-use crate::calendar::token_store::{KeyringTokenStore, StoredTokens, TokenKey, TokenStore};
+use crate::calendar::token_store::{FileTokenStore, StoredTokens, TokenKey, TokenStore};
 use crate::calendar::types::{CalendarEventDto, ConnectionStatus};
 use crate::database::repositories::meeting::MeetingsRepository;
 use crate::state::AppState;
@@ -16,7 +16,7 @@ const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
 
 #[tauri::command]
 pub async fn api_calendar_status() -> Result<ConnectionStatus, String> {
-    let store = KeyringTokenStore;
+    let store = FileTokenStore;
     match store.load(TokenKey::GOOGLE_CALENDAR_DEFAULT).await? {
         Some(tokens) => Ok(ConnectionStatus::Connected {
             email: tokens.email.unwrap_or_else(|| "Connected".to_string()),
@@ -27,7 +27,7 @@ pub async fn api_calendar_status() -> Result<ConnectionStatus, String> {
 
 #[tauri::command]
 pub async fn api_calendar_connect() -> Result<ConnectionStatus, String> {
-    let store = KeyringTokenStore;
+    let store = FileTokenStore;
 
     // NOTE: we deliberately do NOT delete existing tokens before consent.
     // If the OAuth flow fails (user cancels, timeout, network), the user
@@ -69,7 +69,7 @@ pub async fn api_calendar_connect() -> Result<ConnectionStatus, String> {
 
 #[tauri::command]
 pub async fn api_calendar_disconnect() -> Result<(), String> {
-    let store = KeyringTokenStore;
+    let store = FileTokenStore;
 
     // Delete-first: the keyring is the source of truth for "is this user
     // connected?". Revoking on Google but failing to delete locally would
@@ -129,7 +129,7 @@ pub async fn api_calendar_disconnect() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn api_calendar_list_upcoming() -> Result<Vec<CalendarEventDto>, String> {
-    let store = KeyringTokenStore;
+    let store = FileTokenStore;
     let (access_token, _tokens) =
         api::get_fresh_access_token(&store, TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
     api::list_upcoming_events(&access_token).await
@@ -151,7 +151,7 @@ pub async fn api_link_meeting_to_calendar_event(
     meeting_id: String,
     event_id: String,
 ) -> Result<(), String> {
-    let store = KeyringTokenStore;
+    let store = FileTokenStore;
     let (access_token, _tokens) =
         api::get_fresh_access_token(&store, TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
     let ctx = api::fetch_event_as_frozen_context(&access_token, &event_id).await?;
@@ -219,7 +219,7 @@ pub async fn api_calendar_auto_match_and_link(
     start_iso: String,
     end_iso: String,
 ) -> Result<AutoMatchOutcome, String> {
-    let store = KeyringTokenStore;
+    let store = FileTokenStore;
     if matches!(store.load(TokenKey::GOOGLE_CALENDAR_DEFAULT).await, Ok(None) | Err(_)) {
         // Disconnected or keyring unavailable — silent no-match.
         return Ok(AutoMatchOutcome { matched: None, renamed_meeting: false });

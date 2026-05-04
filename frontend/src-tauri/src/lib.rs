@@ -473,6 +473,15 @@ pub fn run() {
         .setup(|_app| {
             log::info!("Application setup complete");
 
+            // Resolve the per-user app data directory once and hand it
+            // to the calendar token store. The store reads tokens
+            // lazily from this directory; without this init call, every
+            // calendar command would error.
+            match _app.path().app_data_dir() {
+                Ok(dir) => calendar::token_store::init_app_data_dir(dir),
+                Err(e) => log::error!("Failed to resolve app_data_dir for token store: {}", e),
+            }
+
             // Initialize system tray
             if let Err(e) = tray::create_tray(_app.handle()) {
                 log::error!("Failed to create system tray: {}", e);
