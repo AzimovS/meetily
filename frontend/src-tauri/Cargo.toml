@@ -67,8 +67,12 @@ serde = { version = "1.0", features = ["derive"] }
 anyhow = "1.0"
 once_cell = "1.17.1"
 uuid = { version = "1.0", features = ["v4", "serde"] }
-# Google Calendar OAuth (Desktop flow, PKCE + client_secret)
-opener = "0.7"
+# Google Calendar OAuth (Desktop flow, PKCE + client_secret).
+# default-features = false drops the `reveal` feature, which pulls
+# in `dbus` -> `libdbus-sys` on Linux and would force every Linux
+# build env (CI included) to install `libdbus-1-dev`. We only use
+# `opener::open(url)`, which spawns `xdg-open` and never needs dbus.
+opener = { version = "0.7", default-features = false }
 sha2 = "0.10"
 base64 = "0.22"
 # Cross-platform audio capture
