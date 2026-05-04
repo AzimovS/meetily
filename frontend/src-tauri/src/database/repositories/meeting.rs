@@ -101,12 +101,31 @@ impl MeetingsRepository {
                 })
                 .collect::<Vec<_>>();
 
+            // Deserialize the calendar context blob here so callers
+            // never have to handle the JSON shape directly. A corrupt
+            // blob is logged and treated as "no context" — the
+            // meeting itself opens cleanly even if Google's response
+            // ever drifts in a way we can't decode.
+            let calendar_context = meeting.calendar_context_json.as_deref().and_then(|json| {
+                match serde_json::from_str::<crate::calendar::types::FrozenCalendarContext>(json) {
+                    Ok(ctx) => Some(ctx),
+                    Err(e) => {
+                        error!(
+                            "calendar_context_json deserialize failed for {}: {}",
+                            meeting_id, e
+                        );
+                        None
+                    }
+                }
+            });
+
             Ok(Some(MeetingDetails {
                 id: meeting.id,
                 title: meeting.title,
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
                 transcripts: meeting_transcripts,
+                calendar_context,
             }))
         } else {
             transaction.rollback().await?;

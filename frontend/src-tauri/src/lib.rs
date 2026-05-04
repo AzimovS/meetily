@@ -779,6 +779,8 @@ pub fn run() {
             calendar::api_calendar_connect,
             calendar::api_calendar_disconnect,
             calendar::api_calendar_list_upcoming,
+            calendar::api_link_meeting_to_calendar_event,
+            calendar::api_unlink_meeting_calendar_context,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

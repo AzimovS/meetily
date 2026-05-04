@@ -153,6 +153,12 @@ pub struct MeetingDetails {
     pub created_at: String,
     pub updated_at: String,
     pub transcripts: Vec<MeetingTranscript>,
+    /// Deserialized snapshot of the linked Google Calendar event,
+    /// or `None` when no event is attached. Surfaced here so the
+    /// frontend `CalendarEventCard` can render without re-parsing
+    /// the underlying JSON column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_context: Option<crate::calendar::types::FrozenCalendarContext>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

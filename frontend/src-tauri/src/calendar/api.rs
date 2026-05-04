@@ -17,7 +17,9 @@ use tokio::sync::Mutex;
 
 use crate::calendar::oauth;
 use crate::calendar::token_store::{StoredTokens, TokenKey, TokenStore};
-use crate::calendar::types::CalendarEventDto;
+use crate::calendar::types::{
+    CalendarEventDto, FrozenAttendee, FrozenCalendarContext, FrozenPerson,
+};
 
 /// Refresh access tokens when they're within this many seconds of expiry.
 /// 60s is enough slack to avoid races with in-flight requests.
@@ -176,6 +178,88 @@ pub async fn list_upcoming_events(
     Ok(events)
 }
 
+/// Fetch a single event by id from the user's primary calendar and
+/// freeze it into a `FrozenCalendarContext` snapshot ready for
+/// persistence. The `captured_at` field is set to "now" inside the
+/// snapshot so the UI can show "captured at <time>" if it ever wants
+/// to.
+pub async fn fetch_event_as_frozen_context(
+    access_token: &str,
+    event_id: &str,
+) -> Result<FrozenCalendarContext, String> {
+    let url = format!(
+        "{CALENDAR_API_BASE}/calendars/primary/events/{}",
+        urlencoding(event_id)
+    );
+
+    let http = reqwest::Client::new();
+    let response = http
+        .get(url)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| format!("Fetch event request failed: {e}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Read event body failed: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format!("Fetch event returned {status}"));
+    }
+
+    let raw: RawEvent = serde_json::from_str(&body)
+        .map_err(|_| format!("Event response malformed (status {status})"))?;
+
+    Ok(freeze_raw_event(raw))
+}
+
+/// Build a `FrozenCalendarContext` from a parsed Google event. Pure;
+/// unit-tested in isolation from any HTTP plumbing.
+fn freeze_raw_event(raw: RawEvent) -> FrozenCalendarContext {
+    let captured_at = chrono::Utc::now().to_rfc3339();
+    let start = raw
+        .start
+        .as_ref()
+        .and_then(|t| t.date_time.clone())
+        .unwrap_or_default();
+    let end = raw
+        .end
+        .as_ref()
+        .and_then(|t| t.date_time.clone())
+        .unwrap_or_default();
+    let organizer = raw.organizer.as_ref().map(|p| FrozenPerson {
+        display_name: p.display_name.clone(),
+        email: p.email.clone(),
+    });
+    let attendees = raw
+        .attendees
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| FrozenAttendee {
+            display_name: a.display_name,
+            email: a.email,
+            response_status: a.response_status,
+        })
+        .collect();
+
+    FrozenCalendarContext {
+        schema_version: 1,
+        source: "google".to_string(),
+        event_id: raw.id,
+        recurrence_id: raw.recurring_event_id,
+        title: raw.summary.unwrap_or_else(|| "(no title)".to_string()),
+        description: raw.description,
+        organizer,
+        attendees,
+        start,
+        end,
+        captured_at,
+    }
+}
+
 /// Window covering "today through end of tomorrow" as ISO-8601 strings
 /// acceptable to Google's `timeMin`/`timeMax`. We use UTC; Google
 /// interprets these correctly and returns events with their original
@@ -228,6 +312,8 @@ struct RawEvent {
     #[serde(default)]
     summary: Option<String>,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     start: Option<RawEventTime>,
     #[serde(default)]
     end: Option<RawEventTime>,
@@ -267,7 +353,9 @@ struct RawPerson {
 #[serde(rename_all = "camelCase")]
 struct RawAttendee {
     #[serde(default)]
-    _email: Option<String>,
+    email: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
     #[serde(default)]
     response_status: Option<String>,
     #[serde(default, rename = "self")]

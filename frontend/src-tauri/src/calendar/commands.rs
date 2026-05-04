@@ -2,8 +2,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::calendar::api;
 use crate::calendar::oauth;
+use crate::calendar::repository;
 use crate::calendar::token_store::{KeyringTokenStore, StoredTokens, TokenKey, TokenStore};
 use crate::calendar::types::{CalendarEventDto, ConnectionStatus};
+use crate::state::AppState;
 
 /// Google's OAuth 2.0 token revocation endpoint (RFC 7009).
 const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
@@ -127,4 +129,49 @@ pub async fn api_calendar_list_upcoming() -> Result<Vec<CalendarEventDto>, Strin
     let (access_token, _tokens) =
         api::get_fresh_access_token(&store, TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
     api::list_upcoming_events(&access_token).await
+}
+
+/// Freeze the chosen Google Calendar event into a JSON snapshot on the
+/// meeting row. This is the *write* side of the calendar context — the
+/// summary pipeline reads it via `calendar::repository::load_context`.
+///
+/// Errors:
+/// - "not connected" — caller should prompt the user to reconnect.
+/// - "meeting not found" — caller likely raced a delete; surface to UI.
+/// - "calendar context too large" — already-rare; fall back to summary
+///   without context.
+/// - Bare network/Google errors propagate verbatim from `fetch_event_*`.
+#[tauri::command]
+pub async fn api_link_meeting_to_calendar_event(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    event_id: String,
+) -> Result<(), String> {
+    let store = KeyringTokenStore;
+    let (access_token, _tokens) =
+        api::get_fresh_access_token(&store, TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
+    let ctx = api::fetch_event_as_frozen_context(&access_token, &event_id).await?;
+    let pool = state.db_manager.pool();
+    repository::persist_context(pool, &meeting_id, &ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+    log::info!(
+        "[calendar] Linked meeting {meeting_id} to event {event_id} ({} attendees)",
+        ctx.attendees.len()
+    );
+    Ok(())
+}
+
+/// Clear the frozen calendar context on a meeting row (the "Unlink"
+/// affordance on the meeting detail page). Safe on rows that have
+/// no linked event — no-op success.
+#[tauri::command]
+pub async fn api_unlink_meeting_calendar_context(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<(), String> {
+    let pool = state.db_manager.pool();
+    repository::clear_context(pool, &meeting_id)
+        .await
+        .map_err(|e| e.to_string())
 }
