@@ -209,6 +209,57 @@ mod tests {
         assert_eq!(r.winner_index, None);
     }
 
+    /// Pairs with the `list_events_in_window` fix in api.rs: once the
+    /// listing query no longer excludes recently-ended events, the
+    /// scorer must correctly reject events whose [start, end] does
+    /// not overlap the recording at all.
+    #[test]
+    fn events_outside_recording_window_yield_no_match() {
+        // Event ended 5s before recording started.
+        let r = score_candidates(
+            t("2026-05-04T15:00:00Z"),
+            t("2026-05-04T16:00:00Z"),
+            &[(
+                "2026-05-04T14:00:00Z".into(),
+                "2026-05-04T14:59:55Z".into(),
+            )],
+        );
+        assert_eq!(r.winner_index, None);
+
+        // Event starts 5s after recording ended.
+        let r = score_candidates(
+            t("2026-05-04T15:00:00Z"),
+            t("2026-05-04T16:00:00Z"),
+            &[(
+                "2026-05-04T16:00:05Z".into(),
+                "2026-05-04T17:00:00Z".into(),
+            )],
+        );
+        assert_eq!(r.winner_index, None);
+    }
+
+    /// The headline scenario from the bug report: a 10:00–11:00
+    /// meeting and a recording that ended at 11:00:05. The event
+    /// end (11:00:00) is before the auto-match invocation `now`, so
+    /// the original `list_upcoming_events` query (`timeMin = now`)
+    /// dropped it. With the new `list_events_in_window` query
+    /// keyed off `recording_start - 60s`, the event reaches the
+    /// scorer, where its full 60-minute overlap easily clears the
+    /// 50% threshold.
+    #[test]
+    fn meeting_ended_just_before_recording_stop_is_matchable() {
+        let r = score_candidates(
+            t("2026-05-04T10:00:00Z"),
+            t("2026-05-04T11:00:05Z"),
+            &[(
+                "2026-05-04T10:00:00Z".into(),
+                "2026-05-04T11:00:00Z".into(),
+            )],
+        );
+        assert_eq!(r.winner_index, Some(0));
+        assert_eq!(r.overlap_seconds, 60 * 60);
+    }
+
     #[test]
     fn recognizes_auto_generated_meeting_title() {
         assert!(is_auto_generated_title("Meeting 04_05_26_15_03_47"));

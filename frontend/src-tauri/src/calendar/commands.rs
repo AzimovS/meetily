@@ -235,14 +235,6 @@ pub async fn api_calendar_auto_match_and_link(
         }
     };
 
-    let events = match api::list_upcoming_events(&access_token).await {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!("[calendar] auto-match: list_upcoming failed ({e}); skipping");
-            return Ok(AutoMatchOutcome { matched: None, renamed_meeting: false });
-        }
-    };
-
     let rec_start = match chrono::DateTime::parse_from_rfc3339(&start_iso) {
         Ok(dt) => dt.with_timezone(&chrono::Utc),
         Err(_) => return Err(format!("Invalid start_iso: {start_iso}")),
@@ -251,6 +243,21 @@ pub async fn api_calendar_auto_match_and_link(
         Ok(dt) => dt.with_timezone(&chrono::Utc),
         Err(_) => return Err(format!("Invalid end_iso: {end_iso}")),
     };
+
+    // Query a window covering the recording, with 60s of slack on
+    // each side. `list_upcoming_events` would use `timeMin = now`,
+    // which excludes events that ended at or just before the
+    // recording stopped — exactly the events we need to match. The
+    // slack covers clock skew between the user's machine and Google.
+    let slack = chrono::Duration::seconds(60);
+    let events =
+        match api::list_events_in_window(&access_token, rec_start - slack, rec_end + slack).await {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("[calendar] auto-match: list events failed ({e}); skipping");
+                return Ok(AutoMatchOutcome { matched: None, renamed_meeting: false });
+            }
+        };
 
     let pairs: Vec<(String, String)> = events
         .iter()

@@ -133,15 +133,46 @@ pub async fn fetch_primary_calendar_email(access_token: &str) -> Result<String, 
 /// the user's local timezone. Filters out cancelled events, all-day
 /// events, working-location / focus / OOO blocks, and events the user
 /// has declined.
+///
+/// **Use this for the UI event list only.** For matching against a
+/// completed recording, use `list_events_in_window`: this function's
+/// `timeMin = now` excludes events that ended at or just before the
+/// recording stopped — exactly the events you want to match against.
 pub async fn list_upcoming_events(
     access_token: &str,
 ) -> Result<Vec<CalendarEventDto>, String> {
     let (time_min, time_max) = window_today_plus_tomorrow();
+    fetch_events_in_window(access_token, &time_min, &time_max).await
+}
 
+/// List events on the primary calendar that overlap a given window.
+/// Used by `api_calendar_auto_match_and_link` so a recording that
+/// stops just after a meeting ended still sees that meeting.
+///
+/// Google's `timeMin` is exclusive on event *end* time, so passing
+/// `time_min = recording_start` (rather than `now`) is the correct
+/// way to capture events that ended during the recording.
+pub async fn list_events_in_window(
+    access_token: &str,
+    time_min: chrono::DateTime<chrono::Utc>,
+    time_max: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<CalendarEventDto>, String> {
+    let tmin = urlencoding(&time_min.to_rfc3339());
+    let tmax = urlencoding(&time_max.to_rfc3339());
+    fetch_events_in_window(access_token, &tmin, &tmax).await
+}
+
+/// Internal: hit the events endpoint with a pre-encoded window, run
+/// the standard filter+map. Both public listers funnel through here.
+async fn fetch_events_in_window(
+    access_token: &str,
+    time_min_encoded: &str,
+    time_max_encoded: &str,
+) -> Result<Vec<CalendarEventDto>, String> {
     let url = format!(
         "{CALENDAR_API_BASE}/calendars/primary/events\
-         ?timeMin={time_min}\
-         &timeMax={time_max}\
+         ?timeMin={time_min_encoded}\
+         &timeMax={time_max_encoded}\
          &singleEvents=true\
          &orderBy=startTime\
          &maxResults=50"
