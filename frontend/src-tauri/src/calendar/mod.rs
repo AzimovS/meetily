@@ -8,6 +8,7 @@
 pub mod api;
 pub mod commands;
 pub mod credentials;
+pub mod matching;
 pub mod oauth;
 pub mod prompt;
 pub mod repository;

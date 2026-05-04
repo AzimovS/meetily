@@ -1,10 +1,14 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
+
 use crate::calendar::api;
+use crate::calendar::matching;
 use crate::calendar::oauth;
 use crate::calendar::repository;
 use crate::calendar::token_store::{KeyringTokenStore, StoredTokens, TokenKey, TokenStore};
 use crate::calendar::types::{CalendarEventDto, ConnectionStatus};
+use crate::database::repositories::meeting::MeetingsRepository;
 use crate::state::AppState;
 
 /// Google's OAuth 2.0 token revocation endpoint (RFC 7009).
@@ -174,4 +178,134 @@ pub async fn api_unlink_meeting_calendar_context(
     repository::clear_context(pool, &meeting_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoMatchOutcome {
+    /// The event the recording was linked to, when overlap exceeded
+    /// `MATCH_THRESHOLD`. `None` covers every fall-through path —
+    /// disconnected, no events nearby, all candidates below
+    /// threshold, network blip — so the frontend renders a single
+    /// "no match" state regardless of cause.
+    pub matched: Option<MatchedEvent>,
+    /// Set to true when the auto-match also rewrote the meeting
+    /// title from the auto-generated `Meeting DD_MM_YY_HH_MM_SS`
+    /// pattern to the calendar event's title.
+    pub renamed_meeting: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchedEvent {
+    pub event_id: String,
+    pub title: String,
+}
+
+/// Score the user's upcoming events against `[start_iso, end_iso]`
+/// and, if the highest-overlap candidate exceeds the threshold,
+/// freeze its context onto the meeting row. Also rewrites the meeting
+/// title to the event title when the existing title is the
+/// auto-generated `Meeting DD_MM_YY_HH_MM_SS` shape — preserves any
+/// title the user (or the summary's title-extraction) already chose.
+///
+/// Best-effort by design: every fall-through (disconnected, network
+/// error, no candidates, no overlap above threshold, freeze size cap
+/// hit) returns `Ok(AutoMatchOutcome { matched: None, renamed_meeting: false })`
+/// rather than an `Err`. The recording itself already succeeded;
+/// calendar enrichment is decoration.
+#[tauri::command]
+pub async fn api_calendar_auto_match_and_link(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    start_iso: String,
+    end_iso: String,
+) -> Result<AutoMatchOutcome, String> {
+    let store = KeyringTokenStore;
+    if matches!(store.load(TokenKey::GOOGLE_CALENDAR_DEFAULT).await, Ok(None) | Err(_)) {
+        // Disconnected or keyring unavailable — silent no-match.
+        return Ok(AutoMatchOutcome { matched: None, renamed_meeting: false });
+    }
+
+    let access_token = match api::get_fresh_access_token(&store, TokenKey::GOOGLE_CALENDAR_DEFAULT)
+        .await
+    {
+        Ok((t, _)) => t,
+        Err(e) => {
+            log::warn!("[calendar] auto-match: token refresh failed ({e}); skipping");
+            return Ok(AutoMatchOutcome { matched: None, renamed_meeting: false });
+        }
+    };
+
+    let events = match api::list_upcoming_events(&access_token).await {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("[calendar] auto-match: list_upcoming failed ({e}); skipping");
+            return Ok(AutoMatchOutcome { matched: None, renamed_meeting: false });
+        }
+    };
+
+    let rec_start = match chrono::DateTime::parse_from_rfc3339(&start_iso) {
+        Ok(dt) => dt.with_timezone(&chrono::Utc),
+        Err(_) => return Err(format!("Invalid start_iso: {start_iso}")),
+    };
+    let rec_end = match chrono::DateTime::parse_from_rfc3339(&end_iso) {
+        Ok(dt) => dt.with_timezone(&chrono::Utc),
+        Err(_) => return Err(format!("Invalid end_iso: {end_iso}")),
+    };
+
+    let pairs: Vec<(String, String)> = events
+        .iter()
+        .map(|e| (e.start.clone(), e.end.clone()))
+        .collect();
+    let result = matching::score_candidates(rec_start, rec_end, &pairs);
+
+    let Some(idx) = result.winner_index else {
+        log::info!(
+            "[calendar] auto-match: no event overlapped {}% of recording",
+            (matching::MATCH_THRESHOLD * 100.0) as u32
+        );
+        return Ok(AutoMatchOutcome { matched: None, renamed_meeting: false });
+    };
+    let chosen = &events[idx];
+    log::info!(
+        "[calendar] auto-match: linking meeting {meeting_id} to '{}' ({}s overlap)",
+        chosen.title,
+        result.overlap_seconds
+    );
+
+    let ctx = match api::fetch_event_as_frozen_context(&access_token, &chosen.id).await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[calendar] auto-match: freeze fetch failed ({e}); skipping");
+            return Ok(AutoMatchOutcome { matched: None, renamed_meeting: false });
+        }
+    };
+
+    let pool = state.db_manager.pool();
+    if let Err(e) = repository::persist_context(pool, &meeting_id, &ctx).await {
+        log::warn!("[calendar] auto-match: persist failed ({e}); skipping");
+        return Ok(AutoMatchOutcome { matched: None, renamed_meeting: false });
+    }
+
+    // Title replacement: only when the meeting still carries the
+    // auto-generated `Meeting DD_MM_YY_HH_MM_SS` shape. Reads current
+    // title via get_meeting_metadata so we don't fight a concurrent
+    // rename from `extract_meeting_name_from_markdown`.
+    let mut renamed = false;
+    if let Ok(Some(model)) = MeetingsRepository::get_meeting_metadata(pool, &meeting_id).await {
+        if matching::is_auto_generated_title(&model.title) {
+            match MeetingsRepository::update_meeting_title(pool, &meeting_id, &chosen.title).await {
+                Ok(true) => renamed = true,
+                Ok(false) => {}
+                Err(e) => log::warn!("[calendar] auto-match: title rewrite failed ({e})"),
+            }
+        }
+    }
+
+    Ok(AutoMatchOutcome {
+        matched: Some(MatchedEvent {
+            event_id: chosen.id.clone(),
+            title: chosen.title.clone(),
+        }),
+        renamed_meeting: renamed,
+    })
 }
