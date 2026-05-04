@@ -135,6 +135,31 @@ pub async fn api_calendar_list_upcoming() -> Result<Vec<CalendarEventDto>, Strin
     api::list_upcoming_events(&access_token).await
 }
 
+/// List events overlapping an arbitrary window. Used by the meeting-detail
+/// picker so a user can manually link a meeting to an event that already
+/// ended — `list_upcoming_events` (timeMin = now) hides those by design.
+/// The frontend picks the window from the meeting's `created_at` so the
+/// picker works for both just-finished and historical meetings.
+#[tauri::command]
+pub async fn api_calendar_list_events_in_window(
+    time_min: String,
+    time_max: String,
+) -> Result<Vec<CalendarEventDto>, String> {
+    let tmin = chrono::DateTime::parse_from_rfc3339(&time_min)
+        .map_err(|_| format!("Invalid time_min: {time_min}"))?
+        .with_timezone(&chrono::Utc);
+    let tmax = chrono::DateTime::parse_from_rfc3339(&time_max)
+        .map_err(|_| format!("Invalid time_max: {time_max}"))?
+        .with_timezone(&chrono::Utc);
+    if tmax <= tmin {
+        return Err("time_max must be after time_min".to_string());
+    }
+    let store = FileTokenStore;
+    let (access_token, _tokens) =
+        api::get_fresh_access_token(&store, TokenKey::GOOGLE_CALENDAR_DEFAULT).await?;
+    api::list_events_in_window(&access_token, tmin, tmax).await
+}
+
 /// Freeze the chosen Google Calendar event into a JSON snapshot on the
 /// meeting row. This is the *write* side of the calendar context — the
 /// summary pipeline reads it via `calendar::repository::load_context`.

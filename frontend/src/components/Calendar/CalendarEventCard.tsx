@@ -51,6 +51,12 @@ interface Props {
    * elsewhere). Refetched via `onLinkChanged` after the user edits.
    */
   context: FrozenCalendarContext | null;
+  /**
+   * Recording start (`meetings.created_at`). Used to anchor the
+   * link-event picker's query window on the day the recording
+   * happened, so events that already ended are still selectable.
+   */
+  meetingCreatedAt: string;
   /** Refetches the parent's meeting object after a link/unlink. */
   onLinkChanged?: () => Promise<void> | void;
 }
@@ -72,7 +78,12 @@ function formatTimeRange(startIso: string, endIso: string): string {
  *   - linked → show event metadata + Change / Unlink
  *   - not linked → show "Link to event…" with a popover dropdown of today + tomorrow
  */
-export function CalendarEventCard({ meetingId, context, onLinkChanged }: Props) {
+export function CalendarEventCard({
+  meetingId,
+  context,
+  meetingCreatedAt,
+  onLinkChanged,
+}: Props) {
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerEvents, setPickerEvents] = useState<CalendarEventDto[] | null>(null);
@@ -112,13 +123,35 @@ export function CalendarEventCard({ meetingId, context, onLinkChanged }: Props) 
     setPickerOpen(true);
     setPickerError(null);
     if (pickerEvents !== null) return; // already loaded once for this open
+    // Anchor the picker window on the local day the recording started,
+    // not on `now`. `api_calendar_list_upcoming` (timeMin = now) hides
+    // events that already ended, which makes manual linking impossible
+    // for any meeting that finished before the user opened the picker.
+    // Window: [start of meeting's local day, +48h] — covers a same-day
+    // recording's pre-existing events plus a buffer for next-day picks.
+    const tMin = new Date(meetingCreatedAt);
+    if (isNaN(tMin.getTime())) {
+      if (alive.current) {
+        setPickerError('Invalid meeting timestamp; cannot load events.');
+      }
+      return;
+    }
+    tMin.setHours(0, 0, 0, 0);
+    const tMax = new Date(tMin);
+    tMax.setDate(tMax.getDate() + 2);
     try {
-      const list = await invoke<CalendarEventDto[]>('api_calendar_list_upcoming');
+      const list = await invoke<CalendarEventDto[]>(
+        'api_calendar_list_events_in_window',
+        {
+          timeMin: tMin.toISOString(),
+          timeMax: tMax.toISOString(),
+        }
+      );
       if (alive.current) setPickerEvents(list);
     } catch (err) {
       if (alive.current) setPickerError(err instanceof Error ? err.message : String(err));
     }
-  }, [pickerEvents]);
+  }, [pickerEvents, meetingCreatedAt]);
 
   const handlePickEvent = useCallback(
     async (eventId: string, eventTitle: string) => {

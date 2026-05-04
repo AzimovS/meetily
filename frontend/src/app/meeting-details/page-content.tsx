@@ -168,6 +168,7 @@ export default function PageContent({
       <CalendarEventCard
         meetingId={meeting.id}
         context={meeting?.calendar_context ?? null}
+        meetingCreatedAt={meeting.created_at}
         onLinkChanged={onMeetingUpdated}
       />
       <div className="flex flex-1 overflow-hidden">
