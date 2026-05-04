@@ -424,7 +424,11 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 
 7. **Audio Permissions**: Request permissions early. macOS requires both microphone AND screen recording for system audio.
 
-8. **SQLite Migrations (sqlx)**: Never use bare `ALTER TABLE ADD COLUMN` — it's non-idempotent and fails on re-run. Always use the table-recreation pattern: `CREATE TABLE IF NOT EXISTS _new` → `INSERT OR IGNORE` → `DROP TABLE` → `ALTER TABLE RENAME`. See `20260306000000_add_runpod_api_key.sql` and `20250920155811_add_openrouter_api_key.sql` for examples. Never modify a committed migration file (sqlx checksums will break).
+8. **SQLite Migrations (sqlx)**: Migrations run exactly once — sqlx records each one's checksum in `_sqlx_migrations` and skips it on subsequent boots, so the SQL itself does not need to be idempotent. Never modify a committed migration file (the checksum will break and existing installs will refuse to start).
+
+   Prefer plain `ALTER TABLE ADD COLUMN` for nullable additions on existing tables — it's atomic, touches no row data, and can't silently lose anything. The migration `20260504000000_add_calendar_context_column.sql` is the canonical example.
+
+   Reach for the table-recreation pattern (`CREATE TABLE _new` → `INSERT` → `DROP TABLE` → `ALTER TABLE RENAME`) only when SQLite's `ALTER TABLE` cannot express the change: dropping a column on older SQLite, changing a column's type or constraints, reordering columns. When recreating, enumerate every column from every prior migration carefully — missing one silently erases that column's data — and explicitly recreate FKs, indexes, and triggers. Recreating a table that other tables FK-reference (e.g. `meetings`) is especially risky and should be a last resort. See `20260306000000_add_runpod_api_key.sql` and `20250920155811_add_openrouter_api_key.sql` for the recreation pattern when it is genuinely needed.
 
 ## Repository-Specific Conventions
 
