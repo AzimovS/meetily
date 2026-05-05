@@ -69,6 +69,8 @@ pub async fn refresh_access_token(refresh_token: &str) -> Result<Tokens, String>
 
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(crate::calendar::api::HTTP_CONNECT_TIMEOUT)
+        .timeout(crate::calendar::api::HTTP_TOTAL_TIMEOUT)
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
@@ -178,6 +180,8 @@ pub async fn connect() -> Result<Tokens, String> {
     // 7. Exchange the authorization code for tokens.
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(crate::calendar::api::HTTP_CONNECT_TIMEOUT)
+        .timeout(crate::calendar::api::HTTP_TOTAL_TIMEOUT)
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 

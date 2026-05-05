@@ -9,7 +9,7 @@
 //! consent dance live in `oauth.rs`. Keychain I/O lives in
 //! `token_store.rs`.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use once_cell::sync::Lazy;
 use serde::Deserialize;
@@ -26,6 +26,28 @@ use crate::calendar::types::{
 const REFRESH_LEEWAY_SECS: u64 = 60;
 
 const CALENDAR_API_BASE: &str = "https://www.googleapis.com/calendar/v3";
+
+/// Bounds the TCP handshake. A connected user on a flaky network
+/// fails fast instead of stalling the recording-stop flow.
+pub(crate) const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Bounds the entire request (handshake + headers + body). The
+/// auto-match path runs up to four sequential calls; an 8s ceiling
+/// per call keeps the worst-case background work under ~30s without
+/// being so aggressive that a healthy-but-slow Google call trips it.
+pub(crate) const HTTP_TOTAL_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Build the standard reqwest client used by every Calendar HTTP call.
+/// Centralized so the timeouts above apply uniformly — adding a new
+/// call site without thinking about timeouts is the failure mode this
+/// helper exists to prevent.
+pub(crate) fn build_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .timeout(HTTP_TOTAL_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
 
 /// Global singleflight lock for token refresh. Multi-account (if it
 /// lands) would key this by `TokenKey`; v1 has one account slot, so a
@@ -106,7 +128,7 @@ pub async fn fetch_primary_calendar_email(access_token: &str) -> Result<String, 
         id: String,
     }
 
-    let http = reqwest::Client::new();
+    let http = build_http_client()?;
     let response = http
         .get(format!("{CALENDAR_API_BASE}/calendars/primary"))
         .bearer_auth(access_token)
@@ -178,7 +200,7 @@ async fn fetch_events_in_window(
          &maxResults=50"
     );
 
-    let http = reqwest::Client::new();
+    let http = build_http_client()?;
     let response = http
         .get(url)
         .bearer_auth(access_token)
@@ -223,7 +245,7 @@ pub async fn fetch_event_as_frozen_context(
         urlencoding(event_id)
     );
 
-    let http = reqwest::Client::new();
+    let http = build_http_client()?;
     let response = http
         .get(url)
         .bearer_auth(access_token)

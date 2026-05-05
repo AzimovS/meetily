@@ -299,39 +299,53 @@ export function useRecordingStop(
           console.log('   folder_path:', folderPath);
 
           // Auto-match the recording window against the user's
-          // upcoming calendar events. Returns Ok(matched: None) for
-          // every fall-through (disconnected, no overlap, network
-          // error) so this is fire-and-forget from the user's
-          // perspective. The card on the meeting detail page renders
-          // the result on next mount.
+          // upcoming calendar events. Truly fire-and-forget: a slow
+          // or hung Google response must NEVER block the post-stop
+          // UX (markMeetingAsSaved, refetchMeetings, navigate). The
+          // Rust handler has its own per-call reqwest timeouts; this
+          // 20s ceiling is a JS-side belt-and-suspenders bound that
+          // accommodates Rust's worst-case sequential timeouts
+          // (~32s) but trips on anything genuinely stuck. The link
+          // surfaces on the meeting detail page either way via
+          // `meeting.calendar_context` on next mount.
           const startIso = sessionStorage.getItem('last_recording_start_iso');
+          // Clear synchronously so a follow-up recording can never
+          // see this stop's stamp.
+          sessionStorage.removeItem('last_recording_start_iso');
           if (startIso) {
             const endIso = new Date().toISOString();
-            try {
-              const outcome = await invoke<{
+            void Promise.race([
+              invoke<{
                 matched: { event_id: string; title: string } | null;
                 renamed_meeting: boolean;
               }>('api_calendar_auto_match_and_link', {
                 meetingId,
                 startIso,
                 endIso,
+              }),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Calendar auto-match timed out')), 20_000)
+              ),
+            ])
+              .then((outcome) => {
+                if (outcome?.matched) {
+                  console.log('✅ Auto-linked to calendar event:', outcome.matched.title);
+                  toast.success(`Linked to "${outcome.matched.title}"`, {
+                    description: outcome.renamed_meeting
+                      ? 'Meeting renamed and calendar context attached.'
+                      : 'Calendar context attached to summary.',
+                    duration: 4000,
+                  });
+                }
+              })
+              .catch((matchErr) => {
+                // The Rust command swallows most failures into
+                // Ok(None); an error here is either a JS-side timeout
+                // or something genuinely unexpected (e.g. malformed
+                // timestamp). Log and proceed — the user has already
+                // moved on by now.
+                console.warn('Calendar auto-match failed:', matchErr);
               });
-              if (outcome.matched) {
-                console.log('✅ Auto-linked to calendar event:', outcome.matched.title);
-                toast.success(`Linked to "${outcome.matched.title}"`, {
-                  description: outcome.renamed_meeting
-                    ? 'Meeting renamed and calendar context attached.'
-                    : 'Calendar context attached to summary.',
-                  duration: 4000,
-                });
-              }
-            } catch (matchErr) {
-              // The Rust command swallows most failures into Ok(None);
-              // an Err here is something genuinely unexpected (e.g.
-              // malformed timestamp). Log and proceed.
-              console.warn('Calendar auto-match failed:', matchErr);
-            }
-            sessionStorage.removeItem('last_recording_start_iso');
           }
 
           // Mark meeting as saved in IndexedDB (for recovery system)
