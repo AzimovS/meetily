@@ -165,12 +165,6 @@ export default function PageContent({
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="flex flex-col h-screen bg-gray-50"
     >
-      <CalendarEventCard
-        meetingId={meeting.id}
-        context={meeting?.calendar_context ?? null}
-        meetingCreatedAt={meeting.created_at}
-        onLinkChanged={onMeetingUpdated}
-      />
       <div className="flex flex-1 overflow-hidden">
         <TranscriptPanel
           transcripts={meetingData.transcripts}
@@ -227,6 +221,14 @@ export default function PageContent({
           onTemplateSelect={templates.handleTemplateSelection}
           isModelConfigLoading={false}
           onOpenModelSettings={handleRegisterModalOpen}
+          headerSlot={
+            <CalendarEventCard
+              meetingId={meeting.id}
+              context={meeting?.calendar_context ?? null}
+              meetingCreatedAt={meeting.created_at}
+              onLinkChanged={onMeetingUpdated}
+            />
+          }
         />
       </div>
     </motion.div>

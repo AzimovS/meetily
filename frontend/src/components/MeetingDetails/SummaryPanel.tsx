@@ -8,7 +8,7 @@ import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
 
-import { RefObject } from 'react';
+import { ReactNode, RefObject } from 'react';
 
 interface SummaryPanelProps {
   meeting: {
@@ -48,6 +48,9 @@ interface SummaryPanelProps {
   onTemplateSelect: (templateId: string, templateName: string) => void;
   isModelConfigLoading?: boolean;
   onOpenModelSettings?: (openFn: () => void) => void;
+  /** Optional left-aligned slot in the panel header (e.g. the calendar
+   *  event chip). Always rendered, regardless of summary state. */
+  headerSlot?: ReactNode;
 }
 
 export function SummaryPanel({
@@ -83,7 +86,8 @@ export function SummaryPanel({
   selectedTemplate,
   onTemplateSelect,
   isModelConfigLoading = false,
-  onOpenModelSettings
+  onOpenModelSettings,
+  headerSlot,
 }: SummaryPanelProps) {
   const isSummaryLoading = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
 
@@ -99,45 +103,53 @@ export function SummaryPanel({
           onChange={onTitleChange}
         /> */}
 
-        {/* Button groups - only show when summary exists */}
-        {aiSummary && !isSummaryLoading && (
-          <div className="flex items-center justify-center w-full pt-0 gap-2">
-            {/* Left-aligned: Summary Generator Button Group */}
-            <div className="flex-shrink-0">
-              <SummaryGeneratorButtonGroup
-                modelConfig={modelConfig}
-                setModelConfig={setModelConfig}
-                onSaveModelConfig={onSaveModelConfig}
-                onGenerateSummary={onGenerateSummary}
-                onStopGeneration={onStopGeneration}
-                customPrompt={customPrompt}
-                summaryStatus={summaryStatus}
-                availableTemplates={availableTemplates}
-                selectedTemplate={selectedTemplate}
-                onTemplateSelect={onTemplateSelect}
-                hasTranscripts={transcripts.length > 0}
-                isModelConfigLoading={isModelConfigLoading}
-                onOpenModelSettings={onOpenModelSettings}
-              />
-            </div>
-
-            {/* Right-aligned: Summary Updater Button Group */}
-            <div className="flex-shrink-0">
-              <SummaryUpdaterButtonGroup
-                isSaving={isSaving}
-                isDirty={isTitleDirty || (summaryRef.current?.isDirty || false)}
-                onSave={onSaveAll}
-                onCopy={onCopySummary}
-                onFind={() => {
-                  // TODO: Implement find in summary functionality
-                  console.log('Find in summary clicked');
-                }}
-                onOpenFolder={onOpenFolder}
-                hasSummary={!!aiSummary}
-              />
-            </div>
-          </div>
-        )}
+        {/* Three-row header:
+            1. Generate / AI Model / Notes  (centered)
+            2. Save / Copy                  (centered)
+            3. Calendar event chip          (left-aligned)
+            Splitting the button groups gives the calendar chip a row of
+            its own, which avoids the squeeze that hid the event title
+            when everything fought for one line. `items-center` centers
+            the chip horizontally in its row; per-row `w-full` lets the
+            button rows still center their contents. */}
+        <div className="flex flex-col gap-2 items-center">
+          {aiSummary && !isSummaryLoading && (
+            <>
+              <div className="flex w-full items-center justify-center gap-2">
+                <SummaryGeneratorButtonGroup
+                  modelConfig={modelConfig}
+                  setModelConfig={setModelConfig}
+                  onSaveModelConfig={onSaveModelConfig}
+                  onGenerateSummary={onGenerateSummary}
+                  onStopGeneration={onStopGeneration}
+                  customPrompt={customPrompt}
+                  summaryStatus={summaryStatus}
+                  availableTemplates={availableTemplates}
+                  selectedTemplate={selectedTemplate}
+                  onTemplateSelect={onTemplateSelect}
+                  hasTranscripts={transcripts.length > 0}
+                  isModelConfigLoading={isModelConfigLoading}
+                  onOpenModelSettings={onOpenModelSettings}
+                />
+              </div>
+              <div className="flex w-full items-center justify-center gap-2">
+                <SummaryUpdaterButtonGroup
+                  isSaving={isSaving}
+                  isDirty={isTitleDirty || (summaryRef.current?.isDirty || false)}
+                  onSave={onSaveAll}
+                  onCopy={onCopySummary}
+                  onFind={() => {
+                    // TODO: Implement find in summary functionality
+                    console.log('Find in summary clicked');
+                  }}
+                  onOpenFolder={onOpenFolder}
+                  hasSummary={!!aiSummary}
+                />
+              </div>
+            </>
+          )}
+          {headerSlot}
+        </div>
       </div>
 
       {isSummaryLoading ? (
