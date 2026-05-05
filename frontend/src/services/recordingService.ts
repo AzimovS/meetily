@@ -7,6 +7,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { loadBetaFeatures } from '@/types/betaFeatures';
 
 export interface RecordingState {
   is_recording: boolean;
@@ -76,11 +77,16 @@ export class RecordingService {
       system_device_name: systemDeviceName,
       meeting_name: meetingName
     });
-    // Stamp the wall-clock recording start so useRecordingStop can hand
-    // it to api_calendar_auto_match_and_link. Centralized here so every
-    // start path (manual, auto-start-from-navigation, sidebar direct
-    // start) gets it without each caller having to remember.
-    sessionStorage.setItem('last_recording_start_iso', new Date().toISOString());
+    // Stamp the wall-clock recording start so useRecordingStop can
+    // hand it to api_calendar_auto_match_and_link. Gated on the
+    // calendarSync beta flag so a user with the feature disabled
+    // never even produces the timestamp the auto-match path keys on
+    // — "off" is then a clean execution gate, not just a UI gate.
+    // Read at call-time from localStorage to avoid threading React
+    // state through the service layer.
+    if (loadBetaFeatures().calendarSync) {
+      sessionStorage.setItem('last_recording_start_iso', new Date().toISOString());
+    }
   }
 
   /**

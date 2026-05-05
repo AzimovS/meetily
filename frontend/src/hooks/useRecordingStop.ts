@@ -8,6 +8,7 @@ import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
 import { storageService } from '@/services/storageService';
 import { transcriptService } from '@/services/transcriptService';
+import { loadBetaFeatures } from '@/types/betaFeatures';
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
 
 interface UseRecordingStopReturn {
@@ -312,7 +313,12 @@ export function useRecordingStop(
           // Clear synchronously so a follow-up recording can never
           // see this stop's stamp.
           sessionStorage.removeItem('last_recording_start_iso');
-          if (startIso) {
+          // Gate on the beta flag at stop-time too. Covers the
+          // "started with flag on, disabled mid-recording" case: the
+          // timestamp exists from start, but we no longer want to
+          // hit Google. recordingService also gates the stamp so
+          // most stops short-circuit on `!startIso` first.
+          if (startIso && loadBetaFeatures().calendarSync) {
             const endIso = new Date().toISOString();
             void Promise.race([
               invoke<{

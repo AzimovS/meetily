@@ -65,7 +65,7 @@ export default function PageContent({
   const { serverAddress } = useSidebar();
 
   // Get model config from ConfigContext
-  const { modelConfig, setModelConfig } = useConfig();
+  const { modelConfig, setModelConfig, betaFeatures } = useConfig();
 
   // Custom hooks
   const meetingData = useMeetingData({ meeting, summaryData, onMeetingUpdated });
@@ -222,12 +222,21 @@ export default function PageContent({
           isModelConfigLoading={false}
           onOpenModelSettings={handleRegisterModalOpen}
           headerSlot={
-            <CalendarEventCard
-              meetingId={meeting.id}
-              context={meeting?.calendar_context ?? null}
-              meetingCreatedAt={meeting.created_at}
-              onLinkChanged={onMeetingUpdated}
-            />
+            // Gated on the calendarSync beta flag so a user who
+            // disables the feature stops seeing the chip (and stops
+            // pinging api_calendar_status on every meeting open).
+            // The Rust-side `calendar_context_json` data stays put —
+            // that was persisted with explicit consent at link time
+            // and continues to enrich the summary prompt; the user
+            // can re-enable to manage links again.
+            betaFeatures.calendarSync && (
+              <CalendarEventCard
+                meetingId={meeting.id}
+                context={meeting?.calendar_context ?? null}
+                meetingCreatedAt={meeting.created_at}
+                onLinkChanged={onMeetingUpdated}
+              />
+            )
           }
         />
       </div>
