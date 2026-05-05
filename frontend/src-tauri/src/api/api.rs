@@ -186,6 +186,12 @@ pub struct MeetingMetadata {
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder_path: Option<String>,
+    /// Same shape as `MeetingDetails.calendar_context`. Surfaced on
+    /// the metadata path so the meeting-details page (which builds its
+    /// `meeting` object from the paginated metadata, not the full
+    /// `api_get_meeting`) can render the linked event card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_context: Option<crate::calendar::types::FrozenCalendarContext>,
 }
 
 /// Paginated transcripts response with total count
@@ -872,12 +878,29 @@ pub async fn api_get_meeting_metadata<R: Runtime>(
     match MeetingsRepository::get_meeting_metadata(pool, &meeting_id).await {
         Ok(Some(meeting)) => {
             log_info!("Successfully retrieved meeting metadata {}", meeting_id);
+            // Mirror the deserialize-or-drop behavior from
+            // MeetingsRepository::get_meeting: a corrupt blob is logged
+            // and treated as "no context" so the page still loads.
+            let calendar_context = meeting.calendar_context_json.as_deref().and_then(|json| {
+                match serde_json::from_str::<crate::calendar::types::FrozenCalendarContext>(json) {
+                    Ok(ctx) => Some(ctx),
+                    Err(e) => {
+                        log_error!(
+                            "calendar_context_json deserialize failed for {}: {}",
+                            meeting_id,
+                            e
+                        );
+                        None
+                    }
+                }
+            });
             Ok(MeetingMetadata {
                 id: meeting.id,
                 title: meeting.title,
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
                 folder_path: meeting.folder_path,
+                calendar_context,
             })
         }
         Ok(None) => {

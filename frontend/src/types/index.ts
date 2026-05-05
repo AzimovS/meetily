@@ -94,6 +94,10 @@ export interface MeetingMetadata {
   created_at: string;
   updated_at: string;
   folder_path?: string;
+  // Deserialized FrozenCalendarContext snapshot. Kept loose-typed here
+  // because the canonical shape lives in the Rust types module; the
+  // CalendarEventCard re-declares its own typed view.
+  calendar_context?: unknown;
 }
 
 export interface PaginatedTranscriptsResponse {

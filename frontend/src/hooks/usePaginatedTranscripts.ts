@@ -25,6 +25,9 @@ interface UsePaginatedTranscriptsReturn {
     loadMore: () => Promise<void>;
     reset: () => void;
     refetch: () => Promise<void>;
+    /** Reload only meeting metadata (e.g. after a calendar link change)
+     *  without resetting the loaded transcripts. */
+    refetchMetadata: () => Promise<void>;
 }
 
 /**
@@ -199,6 +202,10 @@ export function usePaginatedTranscripts({
         [transcripts]
     );
 
+    const refetchMetadata = useCallback(async () => {
+        await loadMetadata();
+    }, [loadMetadata]);
+
     return {
         metadata,
         segments,
@@ -212,5 +219,6 @@ export function usePaginatedTranscripts({
         loadMore,
         reset,
         refetch,
+        refetchMetadata,
     };
 }

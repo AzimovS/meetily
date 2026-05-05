@@ -16,6 +16,10 @@ interface MeetingDetailsResponse {
   updated_at: string;
   transcripts: Transcript[];
   folder_path?: string;
+  // Threaded through from MeetingMetadata so CalendarEventCard can
+  // render the linked event. Loose-typed here; CalendarEventCard
+  // declares its own structural view.
+  calendar_context?: unknown;
 }
 
 function MeetingDetailsContent() {
@@ -44,6 +48,7 @@ function MeetingDetailsContent() {
     loadedCount,
     loadMore,
     refetch,
+    refetchMetadata,
     error: transcriptError,
   } = usePaginatedTranscripts({ meetingId: meetingId || '' });
 
@@ -133,6 +138,7 @@ function MeetingDetailsContent() {
         updated_at: metadata.updated_at,
         transcripts: transcripts, // Paginated transcripts from hook
         folder_path: metadata.folder_path, // For retranscription feature
+        calendar_context: metadata.calendar_context, // For CalendarEventCard
       });
 
       // Sync with sidebar context
@@ -148,16 +154,15 @@ function MeetingDetailsContent() {
     }
   }, [transcriptError]);
 
-  // Extract fetchMeetingDetails for use in child components (now refetches via hook)
+  // Refetch the meeting metadata after a child mutation (e.g. linking a
+  // calendar event). Intentionally metadata-only — reloading transcripts
+  // here would flash the loading state for an unrelated mutation.
   const fetchMeetingDetails = useCallback(async () => {
     if (!meetingId || meetingId === 'intro-call') {
       return;
     }
-
-    // The usePaginatedTranscripts hook automatically refetches when meetingId changes
-    // This function is kept for compatibility with onMeetingUpdated callback
-    console.log('fetchMeetingDetails called - pagination hook will handle refetch');
-  }, [meetingId]);
+    await refetchMetadata();
+  }, [meetingId, refetchMetadata]);
 
   // Reset states when meetingId changes (prevent race conditions)
   useEffect(() => {
